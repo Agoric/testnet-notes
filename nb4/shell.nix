@@ -5,6 +5,7 @@
     nativeBuildInputs = [
       # pkgs.python38Packages.pyspark
       pkgs.jupyter
+      pkgs.python38Packages.jupytext
       pkgs.python38Packages.pandas pkgs.python38Packages.matplotlib
       pkgs.python38Packages.dask
       pkgs.python38Packages.distributed
