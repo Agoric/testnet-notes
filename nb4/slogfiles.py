@@ -3,13 +3,6 @@
 #
 #  - [build model of computron\-to\-wallclock relationship · Issue \#3459 · Agoric/agoric\-sdk](https://github.com/Agoric/agoric-sdk/issues/3459)
 
-# ## TODO: jupytext
-#
-# https://github.com/mwouts/jupytext
-#
-# as in https://github.com/kumc-bmi/naaccr-tumor-data/blob/master/pyspark_explore/requirements.txt
-#
-
 # ## Preface: Python Data Tools
 #
 # See also [shell.nix](shell.nix).
@@ -89,6 +82,9 @@ slogdf[::5].set_index('name')[['st_size']].plot.barh(
     figsize=(10, 8));
 
 # ### random access with `gztool`
+#
+# [gztool](https://github.com/circulosmeos/gztool) `a03c5b4fd5b3` Jul 13 2021.
+#
 #
 # ```
 # ~/projects/gztool/gztool -C -e */*.slog.gz
@@ -1059,3 +1055,10 @@ r = df.compute / df.dur
 r.max() / r.min()
 
 df.sort_values('rate', ascending=False).drop(['time', 'type', 'detail', 'detail_dr'], axis=1)
+
+# ## Colophon: jupytext
+#
+# This is a jupyter notebook paired with a python script using [jupytext](https://jupytext.readthedocs.io/en/latest/).
+#
+# We use the [python38Packages.jupytext](https://search.nixos.org/packages?channel=21.05&from=0&size=50&buckets=%7B%22package_attr_set%22%3A%5B%22python38Packages%22%5D%2C%22package_license_set%22%3A%5B%5D%2C%22package_maintainers_set%22%3A%5B%5D%2C%22package_platforms%22%3A%5B%5D%7D&sort=relevance&query=jupytext) nix package; in particular,  `/nix/store/a9911qj06dy0ah7fshl39x3w4cjs7bxk-python3.8-jupytext-1.11.2`.
+#
