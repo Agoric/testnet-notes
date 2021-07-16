@@ -239,12 +239,7 @@ def extract_lines(p, include=['import-kernel-finish',
             if include and ty not in include:
                 continue
             records.append(dict(record, slogfile=s, line=lo + offset))
-    if not records:
-        records = [dict(time=-1, type='not-found', slogfile=s, line=lo,
-                        blockHeight=np.nan, blockTime=np.nan)]
-    df = pd.DataFrame.from_records(records)
-    return df[sorted(df.columns)]
-
+    return pd.DataFrame.from_records(records)
 
 meta = extract_lines((10, 1, 5000, 2000))
 meta.head() #.groupby('type')[['line']].count()
