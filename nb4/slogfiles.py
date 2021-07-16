@@ -268,9 +268,10 @@ block4 = dd.from_delayed(
 TOP and show_times(block4.head(), ['time', 'blockTime'])
 # -
 
-block4 = block4[block4.type != 'not-found']
-block4.to_sql('block', 'sqlite:///slog4.db', index=False, if_exists='replace',
-              parallel=True, method='multi')
+if TOP:
+    block4 = block4[block4.type != 'not-found']
+    block4.to_sql('block', 'sqlite:///slog4.db', index=False, if_exists='replace',
+                  parallel=True, method='multi')
 
 # ## Analysis
 
