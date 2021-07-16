@@ -193,27 +193,35 @@ TOP and file_chart(slogdf, title='slogfile sizes (sample)', figsize=(10, 8))
 if TOP:
     slogdf.drop(['path'], axis=1).to_sql('slogfile', db4, if_exists='replace')
 
+
 # ## Runs, Blocks, and Deliveries
 #
 # > split each slogfile into runs (each beginning with an import-kernel event)
 
 # +
-import json
-from json import JSONDecodeError
-
-
 def partition_lines(counts, step=100000):
+    """Note: line numbers are **1-based**
+    """
     lo = pd.DataFrame.from_records([
-        dict(ix=ix, start=lo, qty=min(lines - lo, step), lines=lines)
+        dict(ix=ix, start=lo, qty=min(lines + 1 - lo, step), lines=lines)
         for (ix, lines) in zip(counts.index, counts.values)
-        for lo in range(0, lines, step)])
+        for lo in range(1, lines + 1, step)])
     return lo
 
+partition_lines(slogdf.lines)
+
+# +
+import json
+from json import JSONDecodeError
 
 def extract_lines(p, include=['import-kernel-finish',
                               'cosmic-swingset-end-block-start',
                               'cosmic-swingset-end-block-finish'],
                   exclude=[], slogdf=slogdf):
+    """
+    :param p: 4-tuple (slogfile_index, start_line, line_qty, _ignored)
+    note start_line is **1-based**
+    """
     records = []
     error = {'time': -1, 'type': 'error'}
     loads = json.loads
@@ -238,7 +246,7 @@ def extract_lines(p, include=['import-kernel-finish',
     return df[sorted(df.columns)]
 
 
-meta = extract_lines((10, 0, 5000, 2000))
+meta = extract_lines((10, 1, 5000, 2000))
 meta.head() #.groupby('type')[['line']].count()
 
 
