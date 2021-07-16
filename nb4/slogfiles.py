@@ -199,7 +199,7 @@ if TOP:
 # > split each slogfile into runs (each beginning with an import-kernel event)
 
 # +
-def partition_lines(counts, step=100000):
+def partition_lines(counts, step=1000000):
     """Note: line numbers are **1-based**
     """
     lo = pd.DataFrame.from_records([
@@ -265,7 +265,7 @@ TOP and show_times(block4.head(), ['time', 'blockTime'])
 
 if TOP:
     block4 = block4[block4.type != 'not-found']
-    block4.to_csv('block-val-*.csv')
+    block4.to_csv('slog4-results/block-val-*.csv')
 
 # ## slogfile basics
 
