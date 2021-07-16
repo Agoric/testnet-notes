@@ -7,19 +7,11 @@
 #
 # See also [shell.nix](shell.nix).
 
-import logging
-from sys import stderr
-logging.basicConfig(level=logging.INFO, stream=stderr)
-log = logging.getLogger(__name__)
-log.info('logging looks like this')
-
 # +
-import sqlalchemy as sqla
-
 import pandas as pd
 import numpy as np
+import sqlalchemy as sqla
 import matplotlib.cm as cm
-
 import dask
 import dask.dataframe as dd
 import dask.bag as db
@@ -30,16 +22,40 @@ dict(pandas=pd.__version__,
      dask=dask.__version__)
 # -
 
+# ### Notebook / Scripting Authority
+#
+# As a nod to OCap discipline, we avoid ambient authority unless we're in a `TOP`-level scripting or notebook context.
+
+TOP = __name__ == '__main__'
+
+# Logging is a bit of an exception to OCap discipline, as is stderr.
+
+# +
+import logging
+from sys import stderr
+
+logging.basicConfig(level=logging.INFO, stream=stderr)
+
+log = logging.getLogger(__name__)
+log.info('logging looks like this')
+# -
+
 # ### Dask Parallel Scheduler UI
 
+# +
 from dask.distributed import Client, LocalCluster
-cluster = LocalCluster(n_workers=8)
-client = Client(cluster)
-client
+
+if TOP:
+    cluster = LocalCluster(n_workers=8)
+    client = Client(cluster)
+
+TOP and client
+# -
 
 # ## Result Store
 
-db4 = sqla.create_engine('sqlite:///slog4.db')
+if TOP:
+    db4 = sqla.create_engine('sqlite:///slog4.db')
 
 
 # ## SLog files
@@ -58,26 +74,29 @@ db4 = sqla.create_engine('sqlite:///slog4.db')
 #
 
 # +
-def _slogfiles(path='/home/customer/t4/slogfiles'):
-    import pathlib
-    return pathlib.Path(path)
+def files_by_size(files):
+    return pd.DataFrame.from_records([
+        dict(
+            path=p,
+            parent=p.parent.name,
+            name=p.name,
+            st_size=p.stat().st_size
+        )
+        for p in files
+    ]).sort_values('st_size').reset_index(drop=True)
 
-slogdir = _slogfiles()
+if TOP:
+    def _slogfiles(path='/home/customer/t4/slogfiles'):
+        import pathlib
+        return pathlib.Path(path)
 
-slogdf = pd.DataFrame.from_records([
-    dict(
-        path=slogfile,
-        parent=slogfile.parent.name,
-        name=slogfile.name,
-        st_size=slogfile.stat().st_size
-    )
-    for slogfile in slogdir.glob('**/*.slog.gz')
-]).sort_values('st_size').reset_index(drop=True)
+    slogdir = _slogfiles()
+    slogdf = files_by_size(slogdir.glob('**/*.slog.gz'))
 
-slogdf.drop(['path'], axis=1)
+TOP and slogdf.drop(['path'], axis=1)
 # -
 
-slogdf[::5].set_index('name')[['st_size']].plot.barh(
+TOP and slogdf[::5].set_index('name')[['st_size']].plot.barh(
     title='slogfile sizes (sample)',
     figsize=(10, 8));
 
@@ -119,16 +138,19 @@ class CLI:
         with self.__popen(cmd, stdout=PIPE) as proc:
             yield proc.stdout
 
-def _cli(bin):
-    from subprocess import run, Popen
-    return CLI(bin, run, Popen)
+if TOP:
+    def _cli(bin):
+        from subprocess import run, Popen
+        return CLI(bin, run, Popen)
 
-gztool = _cli('/home/customer/projects/gztool/gztool')
+    gztool = _cli('/home/customer/projects/gztool/gztool')
 
 
 # +
 def line_count(path):
     """count lines using binary search
+
+    ISSUE: gztool is ambient
     """
     # log.info('line count: %s', path)
     lo = 0
@@ -154,16 +176,22 @@ def line_count(path):
 
 
 # count lines on all slogfiles in parallel
-slogdf['lines'] = db.from_sequence(slogdf.path).map(line_count).to_dataframe().compute().reset_index(drop=True)
+if TOP:
+    slogdf['lines'] = db.from_sequence(slogdf.path).map(line_count).to_dataframe().compute().reset_index(drop=True)
+
+
+# +
+def file_chart(slogdf, sample=5, **plotkw):
+    df = slogdf[['name', 'st_size', 'lines']].copy()
+    df['b64'] = df.st_size / 64
+    df.drop('st_size', axis=1, inplace=True)
+    df.set_index('name')[::sample].plot.barh(**plotkw)
+
+TOP and file_chart(slogdf, title='slogfile sizes (sample)', figsize=(10, 8))
 # -
 
-df = slogdf[['name', 'st_size', 'lines']].copy()
-df['b64'] = df.st_size / 64
-df.drop('st_size', axis=1, inplace=True)
-df.set_index('name')[::5].plot.barh(title='slogfile sizes (sample)',
-    figsize=(10, 8));
-
-slogdf.drop(['path'], axis=1).to_sql('slogfile', db4, if_exists='replace')
+if TOP:
+    slogdf.drop(['path'], axis=1).to_sql('slogfile', db4, if_exists='replace')
 
 # ## Runs, Blocks, and Deliveries
 #
@@ -190,6 +218,7 @@ def extract_lines(p, include=['import-kernel-finish',
     error = {'time': -1, 'type': 'error'}
     loads = json.loads
     s, lo, r, _tot = p
+    # ISSUE: gztool is ambient
     with gztool.pipe(slogdf.path[s], '-L', lo, '-R', r) as lines:
         for offset, txt in enumerate(lines):
             try:
@@ -228,7 +257,7 @@ block4 = dd.from_delayed(
      for p in partition_lines(slogdf.lines).values],
     meta=meta, verify_meta=False)
 
-show_times(block4.head(), ['time', 'blockTime'])
+TOP and show_times(block4.head(), ['time', 'blockTime'])
 # -
 
 block4 = block4[block4.type != 'not-found']
