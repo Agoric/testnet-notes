@@ -186,12 +186,12 @@ def extract_lines(p, include=['import-kernel-finish',
                               'cosmic-swingset-end-block-start',
                               'cosmic-swingset-end-block-finish'],
                   exclude=[], slogdf=slogdf):
-    s, lo, r, tot = p
     records = []
     error = {'time': -1, 'type': 'error'}
+    loads = json.loads
+    s, lo, r, _tot = p
     with gztool.pipe(slogdf.path[s], '-L', lo, '-R', r) as lines:
-        for lnum, txt in enumerate(lines):
-            loads = json.loads
+        for offset, txt in enumerate(lines):
             try:
                 record = loads(txt)
             except (JSONDecodeError, UnicodeDecodeError):
@@ -201,7 +201,7 @@ def extract_lines(p, include=['import-kernel-finish',
                 continue
             if include and ty not in include:
                 continue
-            records.append(dict(record, slogfile=s, line=lnum))
+            records.append(dict(record, slogfile=s, line=lo + offset))
     if not records:
         records = [dict(time=-1, type='not-found', slogfile=s, line=lo,
                         blockHeight=np.nan, blockTime=np.nan)]
