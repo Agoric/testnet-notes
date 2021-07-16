@@ -270,8 +270,7 @@ TOP and show_times(block4.head(), ['time', 'blockTime'])
 
 if TOP:
     block4 = block4[block4.type != 'not-found']
-    block4.to_sql('block', 'sqlite:///slog4.db', index=False, if_exists='replace',
-                  parallel=True, method='multi')
+    block4.to_csv('block-val-*.csv')
 
 # ## Analysis
 
