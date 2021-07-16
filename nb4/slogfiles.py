@@ -272,7 +272,15 @@ if TOP:
     block4 = block4[block4.type != 'not-found']
     block4.to_csv('block-val-*.csv')
 
-# ## Analysis
+# ## slogfile basics
+
+pd.read_sql("""
+select st_size, lines
+from slogfile
+order by st_size desc
+""", db4).describe()
+
+# ### runs per slogfile
 
 # +
 df = pd.read_sql("""
@@ -285,9 +293,22 @@ order by 2
 """, db4)
 
 df.set_index('name')[['runs']][::5].plot.barh(
-    log=True,
     title='slogfile runs (sample)',
     figsize=(10, 8));
+# -
+
+df
+
+pd.read_sql("""
+select *
+from block b
+-- join slogfile s on s."index" = b.slogfile
+where type = 'import-kernel-finish'
+and slogfile = 171
+order by line
+""", db4)
+
+# ## run boundaries
 
 # +
 runs = pd.read_sql("""
@@ -311,7 +332,15 @@ runs.to_sql('run', db4, if_exists='replace', index=True, index_label='run')
 runs
 # -
 
-# What is the range of blocks in `agorictest-16`?
+runs[(runs.slogfile == 171) & (runs.line == 9492)]
+
+slogdf.path[171]
+
+extract_lines((171, 0, 10000, 2))
+
+extract_lines((171, 9490, 10, 2))
+
+# ### What is the range of blocks in `agorictest-16`?
 
 gen16 = show_times(pd.DataFrame(dict(blockHeight=64628, blockTime=[1625166000], ts=1625166000)), ['blockTime'])
 gen16
@@ -325,7 +354,7 @@ and blockTime >= 1625166000
 )
 """, db4)
 
-# How many validators logged each block?
+# ### How many validators logged each block in agorictest-16?
 
 df = pd.read_sql("""
 select blockHeight, count(distinct slogfile) qty
@@ -338,9 +367,10 @@ df.head()
 
 df.set_index('blockHeight').plot(title='agorictest-16 validator coverage by block', figsize=(9, 6));
 
-# #### Block Processing Time
-
-df = pd.read_sql("""
+# +
+db4.execute('drop table blockrun16')
+db4.execute("""
+create table blockrun16 as
 with b as (
   select *
   from block
@@ -354,9 +384,15 @@ select slogfile
      , case when type = 'cosmic-swingset-end-block-start' then -1 else 1 end sign
      , blockHeight, blockTime
 from b
--- limit 10
+where run is not null
+""")
+
+df = pd.read_sql("""
+select * from blockrun16
 """, db4)
+
 df.tail()
+# -
 
 x = df.groupby('blockHeight')[['run']].count()
 x.plot()
@@ -364,10 +400,108 @@ x.plot()
 x = df.groupby('run')[['blockHeight']].aggregate(['min', 'max'])
 x.plot(title='agorictest-16 slog run ranges', figsize=(9, 5), ylabel='blockHeight');
 
+x['blockHeight'].sort_values('max').reset_index(drop=True).plot()
+
+x.head()
+
 x = df.groupby('run')[['blockTime']].aggregate(['min', 'max'])
 show_times(x['blockTime'], ['min', 'max']).plot(
     title='agorictest-16 slog run intervals', figsize=(9, 5),
 );
+
+# ### Consensus Block-to-Block Time
+
+db4.execute("drop table block16")
+db4.execute("""
+create table block16 as
+  select distinct blockHeight, blockTime
+  from block
+  where blockTime >= 1625166000
+  order by blockHeight
+""")
+
+b16time = pd.read_sql("""
+select * from block16
+""", db4, index_col='blockHeight')
+b16time['delta'] = b16time.shift(-1).blockTime - b16time.blockTime
+b16time[['delta']].describe()
+
+b16time[['delta']].plot(
+    title='agorictest-16 consensus blockTime delta',
+    ylabel='sec',
+    figsize=(9, 6));
+
+show_times(b16time, ['blockTime']).set_index('blockTime')[['delta']].plot(
+    title='agorictest-16 consensus blockTime delta',
+    ylabel='sec',
+    figsize=(9, 6));
+
+# histogram of block-to-block time delta for agorictest-16. (note the log scale on the y axis)
+
+b16time[['delta']].hist(bins=32, log=True)
+
+df = show_times(b16time, ['blockTime'])
+df[df.blockTime <= '2021-07-02 19:00:00'][['delta']].hist(bins=32, log=True)
+
+df[df.blockTime <= '2021-07-02 19:00:00'][['delta']].describe()
+
+# ## Slow Blocks
+
+df = show_times(b16time, ['blockTime'])
+df[(df.blockTime <= '2021-07-02 19:00:00') &
+   (df.delta >= 30)]
+
+b33 = pd.read_sql("""
+select lo.slogfile, lo.run, lo.line, hi.line - lo.line + 1 range, lo.blockHeight
+from blockrun16 lo
+join blockrun16 hi on hi.run = lo.run and hi.blockHeight = lo.blockHeight
+where lo.blockHeight in (72712)
+and lo.sign = -1
+and hi.sign = 1
+""", db4)
+b33
+
+pd.read_sql("""
+select *
+from block
+where slogfile = 93
+and line = 88229
+limit 10
+""", db4)
+
+slogdf.path[148]
+
+slogdf.loc[93]
+
+gztool.run(slogdf.path[93], '-L', 88229, '-R', 1).stdout
+
+b33[['slogfile', 'line', 'range', 'run']].iloc[0]
+
+extract_lines(b33[['slogfile', 'line', 'range', 'run']].iloc[0], include=None)
+
+pd.read_sql("""
+select *
+from run
+where slogfile = 96
+""", db4)
+
+pd.read_sql("""
+select *
+from slogfile
+where "index" = 96
+limit 10
+""", db4)
+
+pd.read_sql("""
+select *
+from block
+where
+slogfile = 96 and
+type = 'import-kernel-finish'
+limit 10
+""", db4)
+
+# ## Correlating block start with block end
 
 lo = df[df.sign == -1]
 hi = df.shift(-1)
