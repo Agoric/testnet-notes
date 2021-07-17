@@ -100,6 +100,8 @@ TOP and show_times(_sa4.get_records('pathrocknetwork/chain-15.pathrocknetwork.sl
 _bySize = _sa4.files_by_size()
 _bySize
 
+_bySize[_bySize.parent == 'KingSuper']
+
 TOP and _bySize[::5].set_index('name')[['st_size']].plot.barh(
     title='slogfile sizes (sample)',
     figsize=(10, 8));
@@ -147,9 +149,16 @@ def file_chart(slogdf, sample=5, **plotkw):
     df.set_index('name')[::sample].plot.barh(**plotkw)
 
 TOP and file_chart(_withLines, title='slogfile sizes (sample)', figsize=(10, 8))
-
-
 # -
+
+# ## slogfile basics
+
+pd.read_sql("""
+select st_size, lines
+from file_meta
+order by st_size desc
+""", db4).describe()
+
 
 # ## Runs, Blocks, and Deliveries
 #
@@ -199,15 +208,39 @@ def runs_todo(withLines):
     runs.line_end = np.where(runs.line_end.isnull(), runs.lines, runs.line_end)
     return runs.sort_values(['st_size', 'file_id', 'line']).reset_index(drop=True)
 
-_runs = provide_table(db4, 'run', lambda: runs_todo(_withLines[:64]), index=False)
+_runs = provide_table(db4, 'run', lambda: runs_todo(_withLines))
 # -
 
 # !sqlite3 slog4.db '.schema run'
 
 show_times(_runs, ['time', 'time_end'])[['st_size', 'line', 'line_end', 'parent', 'file_id', 'time', 'time_end']]
 
+# ### runs per slogfile
+
+df = _runs.groupby('file_id')[['line']].count()
+df.describe()
+
+# +
+df = pd.read_sql("""
+select file_id, count(*) runs, name, st_size, lines
+from run r
+-- join file_id s on s."index" = r.slogfile
+group by file_id
+order by 2
+""", db4)
+
+df.set_index('name')[['runs']][::5].plot.barh(
+    log=True,
+    title='slogfile runs (sample)',
+    figsize=(10, 8));
+# -
+
+# ## agorictest-16 genesis: `2021-07-01 19:00:00`
+
 gen16 = show_times(pd.DataFrame(dict(blockHeight=64628, blockTime=[1625166000], ts=1625166000)), ['blockTime'])
 gen16
+
+# ## Block end start / finish events
 
 # +
 import importlib
@@ -218,12 +251,13 @@ importlib.reload(slogdata)
 _sa4 = SlogAccess(_dir('/home/customer/t4/slogfiles'),
                   _cli('/home/customer/projects/gztool/gztool'))
 
-_sa4.provide_blocks('ChainodeTech', 'agorictest-16_chain.slog.gz', 1, 1000000)
+show_times(
+    _sa4.provide_blocks('ChainodeTech', 'agorictest-16_chain.slog.gz', 1, 1000000)
+)
 
 
-# -
-
-# !sqlite3 slog4.db 'drop table blockval;'
+# +
+# # !sqlite3 slog4.db 'drop table blockval;'
 
 # +
 def blockval_todo(file_meta):
@@ -233,87 +267,37 @@ def blockval_todo(file_meta):
         for _, part in partition_lines(f.lines).iterrows()
     ]).compute()
 
-_blockval = provide_table(db4, 'blockval', lambda: blockval_todo(_withLines[:64]), index=True)
-_blockval
+_blockval = provide_table(db4, 'blockval', lambda: blockval_todo(_withLines), index=True)
+show_times(_blockval)
 # -
 
-if TOP:
-    meta = _sa4.extract_lines((10, 1, 5000, 2000))
-TOP and meta.head() #.groupby('type')[['line']].count()
-
-# +
-if TOP:
-    block4 = dd.from_delayed(
-        [dask.delayed(_sa4.extract_lines)(p)
-         for p in partition_lines(slogdf.lines).values],
-        meta=meta, verify_meta=False)
-
-TOP and show_times(block4.head(), ['time', 'blockTime'])
-# -
-
-part = partition_lines(slogdf.lines)
-p0 = part[(part.ix == 171) & (part.start <= 1353579) & (1353579 < part.start + part.qty)]
-p0
-
-df = _sa4.extract_lines(p0.iloc[0])
-df
-
-df[df.line == 1353579]
-
-block4xx = dd.from_delayed(
-    [dask.delayed(_sa4.extract_lines)(p)
-     for p in partition_lines(slogdf.lines[170:]).values],
-    meta=meta, verify_meta=False)
-block4xx
-
-block4xx[(block4xx.slogfile == 171) & (block4xx.line == 1353579)].compute()
-
-if TOP:
-    block4 = block4[block4.type != 'not-found']
-    block4.to_csv('slog4-results/block-val-*.csv')
-
-blockval4 = dd.read_csv(
-    'slog4-results/block-val-*.csv',
-    dtype={'Unnamed: 0': 'int64',
-           'slogfile': 'int64',
-           'line': 'int64',
-           'time': 'float64',
-           'type': 'object',
-           'blockHeight': 'float64',
-           'blockTime': 'float64'}).drop(columns=['Unnamed: 0'])
-blockval4.head()
-
-blockval4.to_sql('blockval4', 'sqlite:///slog4.db', if_exists='replace', chunksize=10000)
-
-# ## slogfile basics
+# !sqlite3 slog4.db '.schema blockval'
 
 pd.read_sql("""
-select st_size, lines
-from slogfile
-order by st_size desc
-""", db4).describe()
+select file_id, max(blockHeight)
+from blockval
+where blockTime >= 1625166000
+group by file_id
+order by 2 desc
+""", db4)
 
 # ### Consensus Block-to-Block Time
 
-gen16 = show_times(pd.DataFrame(dict(blockHeight=64628, blockTime=[1625166000], ts=1625166000)), ['blockTime'])
-gen16
-
 # +
-db4.execute("""drop table if exists block""")
+# db4.execute("""drop table if exists block""")
+# -
 
 db4.execute("""
 create table block as
   select distinct
          case when blockTime >= 1625166000 then 16 else 15 end chain
        , blockHeight, blockTime
-  from blockval4
-  where blockHeight is not null
+  from blockval
   order by blockTime
 """)
 pd.read_sql("""
 select * from block limit 10
 """, db4)
-# -
 
 # ### What is the range of blocks in `agorictest-16`?
 
@@ -332,29 +316,12 @@ from block
 where chain = 16
 """, db4, index_col='blockHeight')
 
-show_times(blk16, ['blockTime']).plot()
+show_times(blk16).describe(datetime_is_numeric=True)
 # -
 
-df = blockval4[blockval4.blockHeight == 66592].compute()
-df
-
-show_times(df, ['blockTime'])
-
-pd.read_sql("""
-select *
-from blockval4
-where blockHeight = 66592
-and blockTime >= 1625166000
-limit 10
-""", db4)
-
-blk16[blk16.index == 66592]
-
-x = pd.Series(np.arange(blk16.index.min(), blk16.index.max()))
-x[~x.isin(blk16.index)].plot()
-
 b16time = pd.read_sql("""
-select * from block16
+select * from block
+where chain = 16
 """, db4, index_col='blockHeight')
 b16time['delta'] = b16time.shift(-1).blockTime - b16time.blockTime
 b16time[['delta']].describe()
@@ -364,98 +331,26 @@ b16time[['delta']].plot(
     ylabel='sec',
     figsize=(9, 6));
 
-pd.read_sql(
-"""
-select *
-from blockval4
-where blockHeight = 67999
-"""
-    , db4)
-
-
 show_times(b16time, ['blockTime']).set_index('blockTime')[['delta']].plot(
     title='agorictest-16 consensus blockTime delta',
     ylabel='sec',
     figsize=(9, 6));
 
-# histogram of block-to-block time delta for agorictest-16. (note the log scale on the y axis)
+# histogram of block-to-block time delta for agorictest-16. (_Note the log scale on the y axis._)
 
-b16time[['delta']].hist(bins=32, log=True)
+b16time[['delta']].hist(bins=20, log=True);
 
 df = show_times(b16time, ['blockTime'])
-df[df.blockTime <= '2021-07-02 19:00:00'][['delta']].hist(bins=32, log=True)
+df[df.blockTime <= '2021-07-02 19:00:00'][['delta']].hist(bins=20, log=True);
 
 df[df.blockTime <= '2021-07-02 19:00:00'][['delta']].describe()
-
-# ## slogfile spot-check
-#
-# is there really no slogfile with block 66592 from agorictest-16?
-
-_sa4.slogdf[_sa4.slogdf['name'] == 'humantraffic-agorictest16-chain.slog.gz']
-
-
-
-1625177920 >= 1625166000
-
-pd.read_sql("""select *
-from blockval4
-where blockTime = 1625177920
-""", db4)
-
-runs
-
-# ## run boundaries
-
-# +
-runs = pd.read_sql("""
-select slogfile, line, s.lines eof, time
-from blockval4 b
-join slogfile s on b.slogfile = s."index"
-where type = 'import-kernel-finish'
-order by slogfile, line
-""", db4)
-
-# Compute end times
-runs = pd.concat([
-    runs.drop('time', axis=1),
-    runs.groupby('slogfile').apply(lambda g: pd.DataFrame(dict(start=g.time, end=g.time.shift(-1)))),
-    runs.groupby('slogfile').apply(lambda g: pd.DataFrame(dict(line_end=g.line.shift(-1))))
-], axis=1)
-
-runs.line_end = np.where(runs.line_end.isnull(), runs.eof, runs.line_end)
-runs = runs.drop('eof', axis=1)
-runs.to_sql('run', db4, if_exists='replace', index=True, index_label='run')
-runs
-# -
-
-# ### runs per slogfile
-
-df = runs.groupby('slogfile')[['line']].count()
-
-# +
-df = pd.read_sql("""
-select slogfile, count(*) runs, s.name, s.st_size, s.lines
-from run r
-join slogfile s on s."index" = r.slogfile
-group by slogfile
-order by 2
-""", db4)
-
-df.set_index('name')[['runs']][::5].plot.barh(
-    title='slogfile runs (sample)',
-    figsize=(10, 8));
-# -
-
-df
-
-_sa4.extract_lines((171, 5000778, 1, 0))
 
 # ### How many validators logged each block in agorictest-16?
 
 df = pd.read_sql("""
-select blockHeight, count(distinct slogfile) qty
-from blockval4
-where type = 'cosmic-swingset-end-block-start'
+select blockHeight, count(distinct file_id) qty
+from blockval
+where sign = -1
 and blockTime >= 1625166000
 group by blockHeight
 """, db4)
@@ -463,24 +358,25 @@ df.head()
 
 df.set_index('blockHeight').plot(title='agorictest-16 validator coverage by block', figsize=(9, 6));
 
+# !sqlite3 slog4.db '.schema run'
+
 # +
-# db4.execute('drop table blockrun16')
+# db4.execute('drop table if exists blockrun16')
 db4.execute("""
 create table blockrun16 as
 with b as (
   select *
-  from blockval4
+  from blockval
   where blockTime >= 1625166000
 )
-select slogfile
-     , (select r.run
+select file_id
+     , (select r."index"
         from run r
-        where r.slogfile = b.slogfile and r.line <= b.line and b.line < r.line_end) run
+        where r.file_id = b.file_id and r.line <= b.line and b.line < r.line_end) run
      , b.line, b.time
-     , case when type = 'cosmic-swingset-end-block-start' then -1 else 1 end sign
+     , b.sign
      , blockHeight, blockTime
 from b
-where run is not null
 """)
 
 df = pd.read_sql("""
@@ -491,12 +387,12 @@ df.tail()
 # -
 
 x = df.groupby('blockHeight')[['run']].count()
-x.plot()
+x.plot();
 
-x = df.groupby('run')[['blockHeight']].aggregate(['min', 'max'])
+x = df.groupby(['run'])[['blockHeight']].aggregate(['min', 'max'])
 x.plot(title='agorictest-16 slog run ranges', figsize=(9, 5), ylabel='blockHeight');
 
-x['blockHeight'].sort_values('max').reset_index(drop=True).plot()
+x['blockHeight'].sort_values('max').reset_index(drop=True).plot();
 
 x.head()
 

@@ -5,6 +5,7 @@ from zlib import crc32
 import json
 import logging
 
+import numpy as np
 import pandas as pd
 
 log = logging.getLogger(__name__)
@@ -128,8 +129,12 @@ class SlogAccess:
                                   line=[0])).iloc[:0]
 
     def provide_blocks(self, parent, name, start, qty):
-        return self._provide_data(parent, name, start, qty,
-                                  'blocks', self.no_blocks, self.get_blocks)
+        df = self._provide_data(parent, name, start, qty,
+                                'blocks', self.no_blocks, self.get_blocks)
+        df = df.assign(sign=np.where(
+            df.type == 'cosmic-swingset-end-block-start', -1, 1))
+        df = df.drop(columns=['type'])
+        return df
 
     def get_blocks(self, ref, start, qty):
         df = self.get_records(ref, start, qty,
