@@ -389,17 +389,7 @@ df.tail()
 x = df.groupby('blockHeight')[['run']].count()
 x.plot();
 
-x = df.groupby(['run'])[['blockHeight']].aggregate(['min', 'max'])
-x.plot(title='agorictest-16 slog run ranges', figsize=(9, 5), ylabel='blockHeight');
-
 x['blockHeight'].sort_values('max').reset_index(drop=True).plot();
-
-x.head()
-
-x = df.groupby('run')[['blockTime']].aggregate(['min', 'max'])
-show_times(x['blockTime'], ['min', 'max']).plot(
-    title='agorictest-16 slog run intervals', figsize=(9, 5),
-);
 
 # ## Slow Blocks
 
@@ -408,7 +398,7 @@ df[(df.blockTime <= '2021-07-02 19:00:00') &
    (df.delta >= 30)]
 
 b33 = pd.read_sql("""
-select lo.slogfile, lo.run, lo.line, hi.line - lo.line + 1 range, lo.blockHeight
+select lo.file_id, lo.run, lo.line, hi.line - lo.line + 1 range, lo.blockHeight
 from blockrun16 lo
 join blockrun16 hi on hi.run = lo.run and hi.blockHeight = lo.blockHeight
 where lo.blockHeight in (72712)
@@ -417,47 +407,11 @@ and hi.sign = 1
 """, db4)
 b33
 
-pd.read_sql("""
-select *
-from block
-where slogfile = 93
-and line = 88229
-limit 10
-""", db4)
-
-slogdf.path[148]
-
-slogdf.loc[93]
-
-gztool.run(slogdf.path[93], '-L', 88229, '-R', 1).stdout
-
-b33[['slogfile', 'line', 'range', 'run']].iloc[0]
-
-extract_lines(b33[['slogfile', 'line', 'range', 'run']].iloc[0], include=None)
-
-pd.read_sql("""
-select *
-from run
-where slogfile = 96
-""", db4)
-
-pd.read_sql("""
-select *
-from slogfile
-where "index" = 96
-limit 10
-""", db4)
-
-pd.read_sql("""
-select *
-from block
-where
-slogfile = 96 and
-type = 'import-kernel-finish'
-limit 10
-""", db4)
-
 # ## Correlating block start with block end
+
+df = pd.read_sql_table('blockrun16', db4)
+
+df.tail()
 
 lo = df[df.sign == -1]
 hi = df.shift(-1)
@@ -465,10 +419,10 @@ hi = hi[hi.sign == 1]
 dur = hi.time - lo.time
 # show_times(df, ['time', 'time_end'])
 lo['dur'] = dur
-lo['s_hi'] = hi.slogfile
+lo['s_hi'] = hi.file_id
 lo['l_hi'] = hi.line
 lo['t_hi'] = hi.time
-dur = lo[lo.slogfile == lo.s_hi]
+dur = lo[lo.file_id == lo.s_hi]
 show_times(dur, ['time', 'blockTime'])
 
 show_times(
@@ -477,13 +431,6 @@ show_times(
 )
 
 dur[dur.dur.abs() <= 120].plot.scatter(x='blockHeight', y='dur')
-
-hi = pd.read_sql("""
-select distinct blockHeight, time from block
-where type = 'cosmic-swingset-end-block-end' and blockTime >= 1625166000
-""", db4)
-
-lo.set_index('blockHeight').join(hi.set_index('blockHeight'))
 
 # ## @@ Older approaches
 
