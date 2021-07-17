@@ -209,6 +209,34 @@ show_times(_runs, ['time', 'time_end'])[['st_size', 'line', 'line_end', 'parent'
 gen16 = show_times(pd.DataFrame(dict(blockHeight=64628, blockTime=[1625166000], ts=1625166000)), ['blockTime'])
 gen16
 
+# +
+import importlib
+import slogdata
+from slogdata import SlogAccess
+importlib.reload(slogdata)
+
+_sa4 = SlogAccess(_dir('/home/customer/t4/slogfiles'),
+                  _cli('/home/customer/projects/gztool/gztool'))
+
+_sa4.provide_blocks('ChainodeTech', 'agorictest-16_chain.slog.gz', 1, 1000000)
+
+
+# -
+
+# !sqlite3 slog4.db 'drop table blockval;'
+
+# +
+def blockval_todo(file_meta):
+    return dd.from_delayed([
+        dask.delayed(_sa4.provide_blocks)(f.parent, f['name'], part.start, part.qty)
+        for fid, f in file_meta.iterrows()
+        for _, part in partition_lines(f.lines).iterrows()
+    ]).compute()
+
+_blockval = provide_table(db4, 'blockval', lambda: blockval_todo(_withLines[:64]), index=True)
+_blockval
+# -
+
 if TOP:
     meta = _sa4.extract_lines((10, 1, 5000, 2000))
 TOP and meta.head() #.groupby('type')[['line']].count()

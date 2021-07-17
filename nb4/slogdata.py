@@ -97,13 +97,18 @@ class SlogAccess:
                                 line=[0])).iloc[:0]
 
     def provide_runs(self, parent, name, start, qty):
+        return self._provide_data(parent, name, start, qty,
+                                  'runs', self.no_runs, self.get_runs)
+
+    def _provide_data(self, parent, name, start, qty,
+                      kind, none, get):
         path = self.__slogdir / parent / name
-        dest = self.__slogdir / parent / f'{path.stem}-{start}-runs.csv'
+        dest = self.__slogdir / parent / f'{path.stem}-{start}-{kind}.csv'
         if dest.exists():
             # dtype is important for empty CSV files
-            dtype = dict(self.no_runs.assign(file_id=0).dtypes)
+            dtype = dict(none.assign(file_id=0).dtypes)
             return pd.read_csv(dest, dtype=dtype)
-        df = self.get_runs(f'{parent}/{name}', start, qty)
+        df = get(f'{parent}/{name}', start, qty)
         _, file_id = file_size_id(path)
         df = df.assign(file_id=file_id)
         df.to_csv(dest, index=False)
@@ -121,6 +126,10 @@ class SlogAccess:
                                   blockHeight=[0],
                                   blockTime=[0],
                                   line=[0])).iloc[:0]
+
+    def provide_blocks(self, parent, name, start, qty):
+        return self._provide_data(parent, name, start, qty,
+                                  'blocks', self.no_blocks, self.get_blocks)
 
     def get_blocks(self, ref, start, qty):
         df = self.get_records(ref, start, qty,
