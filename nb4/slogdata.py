@@ -2,9 +2,11 @@ from contextlib import contextmanager
 from json import JSONDecodeError
 from subprocess import PIPE
 import json
-
+import logging
 
 import pandas as pd
+
+log = logging.getLogger(__name__)
 
 
 def show_times(df, cols=['time', 'blockTime']):
@@ -14,10 +16,11 @@ def show_times(df, cols=['time', 'blockTime']):
 
 
 class CLI:
-    def __init__(self, bin, run, popen):
+    def __init__(self, bin, run, popen, debug):
         self.bin = bin
         self.__run = run
         self.__popen = popen
+        self.debug = debug
 
     def run(self, *args):
         cmd = [self.bin] + [str(a) for a in args]
@@ -26,6 +29,8 @@ class CLI:
     @contextmanager
     def pipe(self, *args):
         cmd = [self.bin] + [str(a) for a in args]
+        if self.debug:
+            log.info('pipe: %s', ' '.join(cmd))
         with self.__popen(cmd, stdout=PIPE) as proc:
             yield proc.stdout
 
@@ -67,9 +72,9 @@ class SlogAccess:
         error = {'time': -1, 'type': 'error'}
         loads = json.loads
         s, lo, r, _tot = p
-        # ISSUE: gztool is ambient
-        with gztool.pipe(slogdf.path[s], '-L', lo, '-R', r) as lines:
+        with gztool.pipe(slogdf.path[s], '-v', 0, '-L', lo, '-R', r) as lines:
             for offset, txt in enumerate(lines):
+                # log.info('line: %d %s', lo + offset, txt)
                 try:
                     record = loads(txt)
                 except (JSONDecodeError, UnicodeDecodeError):
@@ -79,5 +84,7 @@ class SlogAccess:
                     continue
                 if include and ty not in include:
                     continue
-                records.append(dict(record, slogfile=s, line=lo + offset))
+                record = dict(record, slogfile=s, line=lo + offset)
+                # log.info('record: %s', record)
+                records.append(record)
         return pd.DataFrame.from_records(records)
