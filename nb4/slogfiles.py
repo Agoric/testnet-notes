@@ -34,10 +34,12 @@ TOP = __name__ == '__main__'
 import logging
 from sys import stderr
 
-logging.basicConfig(level=logging.INFO, stream=stderr)
+logging.basicConfig(level=logging.INFO, stream=stderr,
+                    format='%(asctime)s %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
 log = logging.getLogger(__name__)
-log.info('logging looks like this')
+if TOP:
+    log.info('notebook start')
 # -
 
 # ### Dask Parallel Scheduler UI
@@ -54,9 +56,12 @@ TOP and client
 
 # ## Result Store
 
-if TOP:
-    db4 = sqla.create_engine('sqlite:///slog4.db')
+# +
+db4_uri = 'sqlite:///slog4.db'
 
+if TOP:
+    db4 = sqla.create_engine(db4_uri)
+# -
 
 # ## SLog files
 #
@@ -74,29 +79,28 @@ if TOP:
 #
 
 # +
-def files_by_size(files):
-    return pd.DataFrame.from_records([
-        dict(
-            path=p,
-            parent=p.parent.name,
-            name=p.name,
-            st_size=p.stat().st_size
-        )
-        for p in files
-    ]).sort_values('st_size').reset_index(drop=True)
+import importlib
+import slogdata
+importlib.reload(slogdata)
+from slogdata import SlogAccess, CLI, show_times
 
 if TOP:
-    def _slogfiles(path='/home/customer/t4/slogfiles'):
+    def _dir(path):
         import pathlib
         return pathlib.Path(path)
+    def _cli(bin):
+        from subprocess import run, Popen
+        return CLI(bin, run, Popen, debug=True)
+    _sa4 = SlogAccess(_dir('/home/customer/t4/slogfiles'),
+                      _cli('/home/customer/projects/gztool/gztool'))
 
-    slogdir = _slogfiles()
-    slogdf = files_by_size(slogdir.glob('**/*.slog.gz'))
-
-TOP and slogdf.drop(['path'], axis=1)
+TOP and show_times(_sa4.get_records('pathrocknetwork/chain-15.pathrocknetwork.slog.gz', 7721, 2))
 # -
 
-TOP and slogdf[::5].set_index('name')[['st_size']].plot.barh(
+_bySize = _sa4.files_by_size()
+_bySize
+
+TOP and _bySize[::5].set_index('name')[['st_size']].plot.barh(
     title='slogfile sizes (sample)',
     figsize=(10, 8));
 
@@ -119,66 +123,21 @@ TOP and slogdf[::5].set_index('name')[['st_size']].plot.barh(
 # ```
 
 # +
-from contextlib import contextmanager
-from subprocess import PIPE
-
-class CLI:
-    def __init__(self, bin, run, popen):
-        self.bin = bin
-        self.__run = run
-        self.__popen = popen
-
-    def run(self, *args):
-        cmd = [self.bin] + [str(a) for a in args]
-        return self.__run(cmd, capture_output=True)
-
-    @contextmanager
-    def pipe(self, *args):
-        cmd = [self.bin] + [str(a) for a in args]
-        with self.__popen(cmd, stdout=PIPE) as proc:
-            yield proc.stdout
-
-if TOP:
-    def _cli(bin):
-        from subprocess import run, Popen
-        return CLI(bin, run, Popen)
-
-    gztool = _cli('/home/customer/projects/gztool/gztool')
-
-
-# +
-def line_count(path):
-    """count lines using binary search
-
-    ISSUE: gztool is ambient
-    """
-    # log.info('line count: %s', path)
-    lo = 0
-    hi = 1024
-    while True:
-        # log.info('finding upper bound: %d to %d', lo, hi)
-        line = gztool.run(str(path), '-L', hi, '-R', 1).stdout
-        if not line:
-            break
-        lo = hi
-        hi *= 2
-    log.info('%s/%s <= %d', path.parent.name, path.name, hi)
-    while hi > lo + 1:
-        mid = (hi + lo) // 2
-        line = gztool.run(str(path), '-L', mid, '-R', 1).stdout
-        # log.info('narrowing: %d (%d to %d) %s', mid, lo, hi, not not line)
-        if line:
-            lo = mid
-        else:
-            hi = mid
-    log.info('%s/%s = %d', path.parent.name, path.name, lo)
-    return lo
-
-
 # count lines on all slogfiles in parallel
-if TOP:
-    slogdf['lines'] = db.from_sequence(slogdf.path).map(line_count).to_dataframe().compute().reset_index(drop=True)
+# TODO: if it's already in the DB, don't compute it again.
 
+if TOP:
+    _withLines = _bySize.assign(
+        lines=db.from_sequence(_bySize.values).map(
+            lambda v: _sa4.line_count(*v[1:3])).compute())
+
+TOP and _withLines
+# -
+
+_withLines.to_sql('file_meta', db4, index=False, if_exists='replace')
+
+
+# !sqlite3 slog4.db '.header on' '.mode column' 'select * from file_meta limit 3'
 
 # +
 def file_chart(slogdf, sample=5, **plotkw):
@@ -187,60 +146,72 @@ def file_chart(slogdf, sample=5, **plotkw):
     df.drop('st_size', axis=1, inplace=True)
     df.set_index('name')[::sample].plot.barh(**plotkw)
 
-TOP and file_chart(slogdf, title='slogfile sizes (sample)', figsize=(10, 8))
+TOP and file_chart(_withLines, title='slogfile sizes (sample)', figsize=(10, 8))
+
+
 # -
-
-if TOP:
-    slogdf.drop(['path'], axis=1).to_sql('slogfile', db4, if_exists='replace')
-
 
 # ## Runs, Blocks, and Deliveries
 #
 # > split each slogfile into runs (each beginning with an import-kernel event)
 
 # +
-def partition_lines(counts, step=1000000):
+def partition_lines(lines, step=1000000):
     """Note: line numbers are **1-based**
     """
     lo = pd.DataFrame.from_records([
-        dict(ix=ix, start=lo, qty=min(lines + 1 - lo, step), lines=lines)
-        for (ix, lines) in zip(counts.index, counts.values)
+        dict(start=lo, qty=min(lines + 1 - lo, step), lines=lines)
         for lo in range(1, lines + 1, step)])
     return lo
 
-partition_lines(slogdf.lines)
+partition_lines(_withLines.lines.iloc[-1])
+
 
 # +
-# import importlib
-# import slogdata
-# importlib.reload(slogdata)
-from slogdata import SlogAccess, CLI
+#client.restart()
 
-if TOP:
-    def _dir(path):
-        import pathlib
-        return pathlib.Path(path)
-    def _cli(bin):
-        from subprocess import run, Popen
-        return CLI(bin, run, Popen)
-    _sa4 = SlogAccess.make(_dir('/home/customer/t4/slogfiles'),
-                           _cli('/home/customer/projects/gztool/gztool'))
+# +
+# # !sqlite3 slog4.db 'drop table run'
 
-TOP and show_times(_sa4.extract_lines((3, 7721, 2, -1)), ['time', 'blockTime'])
+# +
+def provide_table(engine, table, todo, chunksize=None, index=True):
+    if sqla.inspect(engine).has_table(table):
+        return pd.read_sql_table(table, engine, chunksize=chunksize)
+    df = todo()
+    df.to_sql(table, engine, index=index)
+    return df
+
+def runs_todo(withLines):
+    runs = dd.from_delayed([
+        dask.delayed(_sa4.provide_runs)(f.parent, f['name'], part.start, part.qty)
+        for fid, f in withLines.iterrows()
+        for _, part in partition_lines(f.lines).iterrows()
+    ]).compute().sort_values(['file_id', 'line'])
+    withNames = pd.merge(runs, withLines[['file_id', 'parent', 'name', 'st_size', 'lines']],
+                         on='file_id')
+    # Compute end times
+    byFile = withNames.groupby('file_id')
+    runs = pd.concat([
+        withNames,
+        byFile.apply(lambda g: pd.DataFrame(dict(time_end=g.time.shift(-1)))),
+        byFile.apply(lambda g: pd.DataFrame(dict(line_end=g.line.shift(-1)))),
+    ], axis=1)
+    runs.line_end = np.where(runs.line_end.isnull(), runs.lines, runs.line_end)
+    return runs.sort_values(['st_size', 'file_id', 'line']).reset_index(drop=True)
+
+_runs = provide_table(db4, 'run', lambda: runs_todo(_withLines[:64]), index=False)
+# -
+
+# !sqlite3 slog4.db '.schema run'
+
+show_times(_runs, ['time', 'time_end'])[['st_size', 'line', 'line_end', 'parent', 'file_id', 'time', 'time_end']]
+
+gen16 = show_times(pd.DataFrame(dict(blockHeight=64628, blockTime=[1625166000], ts=1625166000)), ['blockTime'])
+gen16
 
 if TOP:
     meta = _sa4.extract_lines((10, 1, 5000, 2000))
 TOP and meta.head() #.groupby('type')[['line']].count()
-
-
-# -
-
-def show_times(df, cols):
-    out = df.copy()
-    for col in cols:
-        out[col] = pd.to_datetime(out[col], unit='s')
-    return out
-
 
 # +
 if TOP:
@@ -251,6 +222,23 @@ if TOP:
 
 TOP and show_times(block4.head(), ['time', 'blockTime'])
 # -
+
+part = partition_lines(slogdf.lines)
+p0 = part[(part.ix == 171) & (part.start <= 1353579) & (1353579 < part.start + part.qty)]
+p0
+
+df = _sa4.extract_lines(p0.iloc[0])
+df
+
+df[df.line == 1353579]
+
+block4xx = dd.from_delayed(
+    [dask.delayed(_sa4.extract_lines)(p)
+     for p in partition_lines(slogdf.lines[170:]).values],
+    meta=meta, verify_meta=False)
+block4xx
+
+block4xx[(block4xx.slogfile == 171) & (block4xx.line == 1353579)].compute()
 
 if TOP:
     block4 = block4[block4.type != 'not-found']
@@ -277,41 +265,123 @@ from slogfile
 order by st_size desc
 """, db4).describe()
 
-# ### runs per slogfile
+# ### Consensus Block-to-Block Time
+
+gen16 = show_times(pd.DataFrame(dict(blockHeight=64628, blockTime=[1625166000], ts=1625166000)), ['blockTime'])
+gen16
 
 # +
-df = pd.read_sql("""
-select slogfile, count(*) runs, s.name, s.st_size, s.lines
-from blockval4 b
-join slogfile s on s."index" = b.slogfile
-where type = 'import-kernel-finish'
-group by slogfile
-order by 2
-""", db4)
+db4.execute("""drop table if exists block""")
 
-df.set_index('name')[['runs']][::5].plot.barh(
-    log=True,
-    title='slogfile runs (sample)',
-    figsize=(10, 8));
+db4.execute("""
+create table block as
+  select distinct
+         case when blockTime >= 1625166000 then 16 else 15 end chain
+       , blockHeight, blockTime
+  from blockval4
+  where blockHeight is not null
+  order by blockTime
+""")
+pd.read_sql("""
+select * from block limit 10
+""", db4)
 # -
 
+# ### What is the range of blocks in `agorictest-16`?
+
+pd.read_sql("""
+select lo, n, lo + n - 1,  hi from (
+select min(blockHeight) lo, max(blockHeight) hi, count(distinct blockHeight) n
+from block
+where chain = 16
+)
+""", db4)
+
+# +
+blk16 = pd.read_sql("""
+select blockHeight, blockTime
+from block
+where chain = 16
+""", db4, index_col='blockHeight')
+
+show_times(blk16, ['blockTime']).plot()
+# -
+
+df = blockval4[blockval4.blockHeight == 66592].compute()
 df
+
+show_times(df, ['blockTime'])
 
 pd.read_sql("""
 select *
-from blockval4 b
--- join slogfile s on s."index" = b.slogfile
-where type = 'import-kernel-finish'
-and slogfile = 171
-order by line
+from blockval4
+where blockHeight = 66592
+and blockTime >= 1625166000
+limit 10
 """, db4)
+
+blk16[blk16.index == 66592]
+
+x = pd.Series(np.arange(blk16.index.min(), blk16.index.max()))
+x[~x.isin(blk16.index)].plot()
+
+b16time = pd.read_sql("""
+select * from block16
+""", db4, index_col='blockHeight')
+b16time['delta'] = b16time.shift(-1).blockTime - b16time.blockTime
+b16time[['delta']].describe()
+
+b16time[['delta']].plot(
+    title='agorictest-16 consensus blockTime delta',
+    ylabel='sec',
+    figsize=(9, 6));
+
+pd.read_sql(
+"""
+select *
+from blockval4
+where blockHeight = 67999
+"""
+    , db4)
+
+
+show_times(b16time, ['blockTime']).set_index('blockTime')[['delta']].plot(
+    title='agorictest-16 consensus blockTime delta',
+    ylabel='sec',
+    figsize=(9, 6));
+
+# histogram of block-to-block time delta for agorictest-16. (note the log scale on the y axis)
+
+b16time[['delta']].hist(bins=32, log=True)
+
+df = show_times(b16time, ['blockTime'])
+df[df.blockTime <= '2021-07-02 19:00:00'][['delta']].hist(bins=32, log=True)
+
+df[df.blockTime <= '2021-07-02 19:00:00'][['delta']].describe()
+
+# ## slogfile spot-check
+#
+# is there really no slogfile with block 66592 from agorictest-16?
+
+_sa4.slogdf[_sa4.slogdf['name'] == 'humantraffic-agorictest16-chain.slog.gz']
+
+
+
+1625177920 >= 1625166000
+
+pd.read_sql("""select *
+from blockval4
+where blockTime = 1625177920
+""", db4)
+
+runs
 
 # ## run boundaries
 
 # +
 runs = pd.read_sql("""
 select slogfile, line, s.lines eof, time
-from block b
+from blockval4 b
 join slogfile s on b.slogfile = s."index"
 where type = 'import-kernel-finish'
 order by slogfile, line
@@ -330,33 +400,33 @@ runs.to_sql('run', db4, if_exists='replace', index=True, index_label='run')
 runs
 # -
 
-runs[(runs.slogfile == 171) & (runs.line == 9492)]
+# ### runs per slogfile
 
-slogdf.path[171]
+df = runs.groupby('slogfile')[['line']].count()
 
-extract_lines((171, 0, 10000, 2))
-
-extract_lines((171, 9490, 10, 2))
-
-# ### What is the range of blocks in `agorictest-16`?
-
-gen16 = show_times(pd.DataFrame(dict(blockHeight=64628, blockTime=[1625166000], ts=1625166000)), ['blockTime'])
-gen16
-
-pd.read_sql("""
-select lo, n, lo + n - 1,  hi from (
-select min(blockHeight) lo, max(blockHeight) hi, count(distinct blockHeight) n
-from block
-where type = 'cosmic-swingset-end-block-start'
-and blockTime >= 1625166000
-)
+# +
+df = pd.read_sql("""
+select slogfile, count(*) runs, s.name, s.st_size, s.lines
+from run r
+join slogfile s on s."index" = r.slogfile
+group by slogfile
+order by 2
 """, db4)
+
+df.set_index('name')[['runs']][::5].plot.barh(
+    title='slogfile runs (sample)',
+    figsize=(10, 8));
+# -
+
+df
+
+_sa4.extract_lines((171, 5000778, 1, 0))
 
 # ### How many validators logged each block in agorictest-16?
 
 df = pd.read_sql("""
 select blockHeight, count(distinct slogfile) qty
-from block
+from blockval4
 where type = 'cosmic-swingset-end-block-start'
 and blockTime >= 1625166000
 group by blockHeight
@@ -366,12 +436,12 @@ df.head()
 df.set_index('blockHeight').plot(title='agorictest-16 validator coverage by block', figsize=(9, 6));
 
 # +
-db4.execute('drop table blockrun16')
+# db4.execute('drop table blockrun16')
 db4.execute("""
 create table blockrun16 as
 with b as (
   select *
-  from block
+  from blockval4
   where blockTime >= 1625166000
 )
 select slogfile
@@ -406,42 +476,6 @@ x = df.groupby('run')[['blockTime']].aggregate(['min', 'max'])
 show_times(x['blockTime'], ['min', 'max']).plot(
     title='agorictest-16 slog run intervals', figsize=(9, 5),
 );
-
-# ### Consensus Block-to-Block Time
-
-db4.execute("drop table block16")
-db4.execute("""
-create table block16 as
-  select distinct blockHeight, blockTime
-  from block
-  where blockTime >= 1625166000
-  order by blockHeight
-""")
-
-b16time = pd.read_sql("""
-select * from block16
-""", db4, index_col='blockHeight')
-b16time['delta'] = b16time.shift(-1).blockTime - b16time.blockTime
-b16time[['delta']].describe()
-
-b16time[['delta']].plot(
-    title='agorictest-16 consensus blockTime delta',
-    ylabel='sec',
-    figsize=(9, 6));
-
-show_times(b16time, ['blockTime']).set_index('blockTime')[['delta']].plot(
-    title='agorictest-16 consensus blockTime delta',
-    ylabel='sec',
-    figsize=(9, 6));
-
-# histogram of block-to-block time delta for agorictest-16. (note the log scale on the y axis)
-
-b16time[['delta']].hist(bins=32, log=True)
-
-df = show_times(b16time, ['blockTime'])
-df[df.blockTime <= '2021-07-02 19:00:00'][['delta']].hist(bins=32, log=True)
-
-df[df.blockTime <= '2021-07-02 19:00:00'][['delta']].describe()
 
 # ## Slow Blocks
 
