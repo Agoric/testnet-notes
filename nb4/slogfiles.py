@@ -211,38 +211,26 @@ def partition_lines(counts, step=1000000):
 partition_lines(slogdf.lines)
 
 # +
-import json
-from json import JSONDecodeError
+# import importlib
+# import slogdata
+# importlib.reload(slogdata)
+from slogdata import SlogAccess, CLI
 
-def extract_lines(p, include=['import-kernel-finish',
-                              'cosmic-swingset-end-block-start',
-                              'cosmic-swingset-end-block-finish'],
-                  exclude=[], slogdf=slogdf):
-    """
-    :param p: 4-tuple (slogfile_index, start_line, line_qty, _ignored)
-    note start_line is **1-based**
-    """
-    records = []
-    error = {'time': -1, 'type': 'error'}
-    loads = json.loads
-    s, lo, r, _tot = p
-    # ISSUE: gztool is ambient
-    with gztool.pipe(slogdf.path[s], '-L', lo, '-R', r) as lines:
-        for offset, txt in enumerate(lines):
-            try:
-                record = loads(txt)
-            except (JSONDecodeError, UnicodeDecodeError):
-                record = error
-            ty = record['type']
-            if ty in exclude:
-                continue
-            if include and ty not in include:
-                continue
-            records.append(dict(record, slogfile=s, line=lo + offset))
-    return pd.DataFrame.from_records(records)
+if TOP:
+    def _dir(path):
+        import pathlib
+        return pathlib.Path(path)
+    def _cli(bin):
+        from subprocess import run, Popen
+        return CLI(bin, run, Popen)
+    _sa4 = SlogAccess.make(_dir('/home/customer/t4/slogfiles'),
+                           _cli('/home/customer/projects/gztool/gztool'))
 
-meta = extract_lines((10, 1, 5000, 2000))
-meta.head() #.groupby('type')[['line']].count()
+TOP and show_times(_sa4.extract_lines((3, 7721, 2, -1)), ['time', 'blockTime'])
+
+if TOP:
+    meta = _sa4.extract_lines((10, 1, 5000, 2000))
+TOP and meta.head() #.groupby('type')[['line']].count()
 
 
 # -
@@ -255,10 +243,11 @@ def show_times(df, cols):
 
 
 # +
-block4 = dd.from_delayed(
-    [dask.delayed(extract_lines)(p)
-     for p in partition_lines(slogdf.lines).values],
-    meta=meta, verify_meta=False)
+if TOP:
+    block4 = dd.from_delayed(
+        [dask.delayed(_sa4.extract_lines)(p)
+         for p in partition_lines(slogdf.lines).values],
+        meta=meta, verify_meta=False)
 
 TOP and show_times(block4.head(), ['time', 'blockTime'])
 # -
@@ -266,6 +255,19 @@ TOP and show_times(block4.head(), ['time', 'blockTime'])
 if TOP:
     block4 = block4[block4.type != 'not-found']
     block4.to_csv('slog4-results/block-val-*.csv')
+
+blockval4 = dd.read_csv(
+    'slog4-results/block-val-*.csv',
+    dtype={'Unnamed: 0': 'int64',
+           'slogfile': 'int64',
+           'line': 'int64',
+           'time': 'float64',
+           'type': 'object',
+           'blockHeight': 'float64',
+           'blockTime': 'float64'}).drop(columns=['Unnamed: 0'])
+blockval4.head()
+
+blockval4.to_sql('blockval4', 'sqlite:///slog4.db', if_exists='replace', chunksize=10000)
 
 # ## slogfile basics
 
@@ -280,7 +282,7 @@ order by st_size desc
 # +
 df = pd.read_sql("""
 select slogfile, count(*) runs, s.name, s.st_size, s.lines
-from block b
+from blockval4 b
 join slogfile s on s."index" = b.slogfile
 where type = 'import-kernel-finish'
 group by slogfile
@@ -288,6 +290,7 @@ order by 2
 """, db4)
 
 df.set_index('name')[['runs']][::5].plot.barh(
+    log=True,
     title='slogfile runs (sample)',
     figsize=(10, 8));
 # -
@@ -296,7 +299,7 @@ df
 
 pd.read_sql("""
 select *
-from block b
+from blockval4 b
 -- join slogfile s on s."index" = b.slogfile
 where type = 'import-kernel-finish'
 and slogfile = 171
