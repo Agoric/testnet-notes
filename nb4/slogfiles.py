@@ -138,8 +138,10 @@ TOP and _withLines
 
 _withLines.to_sql('file_meta', db4, index=False, if_exists='replace')
 
-
 # !sqlite3 slog4.db '.header on' '.mode column' 'select * from file_meta limit 3'
+
+_withLines = pd.read_sql_table('file_meta', db4)
+
 
 # +
 def file_chart(slogdf, sample=5, **plotkw):
@@ -397,6 +399,8 @@ df = show_times(b16time, ['blockTime'])
 df[(df.blockTime <= '2021-07-02 19:00:00') &
    (df.delta >= 30)]
 
+# Which runs include block 72712, which took 31 sec?
+
 b33 = pd.read_sql("""
 select lo.file_id, lo.run, lo.line, hi.line - lo.line + 1 range, lo.blockHeight
 from blockrun16 lo
@@ -409,8 +413,7 @@ b33
 
 # ## Correlating block start with block end
 
-df = pd.read_sql_table('blockrun16', db4)
-
+_blockrun16 = df = pd.read_sql_table('blockrun16', db4)
 df.tail()
 
 lo = df[df.sign == -1]
@@ -432,7 +435,78 @@ show_times(
 
 dur[dur.dur.abs() <= 120].plot.scatter(x='blockHeight', y='dur')
 
-# ## @@ Older approaches
+dur[['blockHeight', 'dur']].describe()
+
+
+# ## Cranks in a Block
+
+# +
+def long_runs_including(runs, blockrun, blockHeight):
+    runs_matching = blockrun[blockrun.blockHeight == blockHeight].run
+    runs = runs.assign(length=runs.line_end - runs.line)
+    runs = runs[runs.index.isin(runs_matching)]
+    return runs.sort_values('length', ascending=False)
+
+_long16 = long_runs_including(_runs, _blockrun16, 64628)
+_long16.head()
+# -
+
+dur[dur.run == _long16.index[0]]
+
+_blockrun16[(_blockrun16.run == _long16.index[0]) & (_blockrun16.blockHeight == 64628)].iloc[:2]
+
+
+# +
+def blockrun_records(blockHeight, run, slogAccess, blockrun,
+                     target=None, include=None):
+    ref = f'{run.parent}/{run["name"]}'
+    br = blockrun[(blockrun.run == run.name) & (blockrun.blockHeight == blockHeight)]
+    block_start = br.iloc[0]  # assert sign == -1?
+    block_end = br.iloc[1]
+    length = block_end.line - block_start.line + 1
+    df = slogAccess.get_records(f'{run.parent}/{run["name"]}', int(block_start.line), int(length),
+                                target=target, include=include)
+    return df.assign(file_id=run.file_id)
+
+def get_vats(slogAccess, ref, start, qty):
+        df = slogAccess.get_records(ref, start, qty,
+                              target='create-vat',
+                              include=['create-vat'])
+        return df
+
+def vats_in_blockrun(blockHeight, run, slogAccess, blockrun):
+    br = blockrun[(blockrun.run == run.name) & (blockrun.blockHeight == blockHeight)]
+    block_start = br.iloc[0]  # assert sign == -1?
+    block_end = br.iloc[1]
+    length = block_end.line - block_start.line + 1
+    ref = f'{run.parent}/{run["name"]}'
+    df = get_vats(slogAccess, ref, int(block_start.line), int(length))
+    return df.assign(blockHeight=blockHeight, parent=run.parent)
+
+# _sa4.get_records('Nodeasy.com/Nodeasy.com-agorictest15-chain.slog.gz', 1662497, 1671912 - 1662497)
+vats_in_blockrun(_blockrun16.iloc[0].blockHeight, _runs.loc[_long16.index[0]],
+                 _sa4, _blockrun16)
+# -
+
+vats_in_blockrun(64629, _runs.loc[_long16.index[0]],
+                 _sa4, _blockrun16)
+
+
+no_deliveries = pd.DataFrame.from_records([
+    {'time': 1625198620.6265895,
+     'type': 'deliver-result',
+     'crankNum': 1291,
+     'vatID': 'v11',
+     'deliveryNum': 124,
+     'kd': object(),
+     'line': 1673077,
+     'dr': object(),
+     'syscalls': 2,
+     'method': 'inbound',
+     'compute': 119496,
+     'dur': 0.1912224292755127,
+    }]).iloc[:0]
+no_deliveries.dtypes
 
 # +
 import json
@@ -442,54 +516,10 @@ import itertools
 # {"time":1625059432.2096362,"type":"cosmic-swingset-end-block-finish","blockHeight":58394,"blockTime":1625059394}
 
 
-def iter_blocks(run, types=['deliver', 'deliver-result', 'syscall', 'syscall-result']):
-    block = None
-    records = []
-    for kernel_start, record in run:
-        ty = record['type']
-        if ty == 'cosmic-swingset-end-block-start':
-            block_start = record
-        elif ty == 'cosmic-swingset-end-block-finish':
-            block_finish = record
-            yield kernel_start, block_start, block_finish, records
-            block_start = block_finish = None
-            records = []
-        elif ty not in types:
-            continue
-        else:
-            records.append(record)
-
-
-def iter_run(slogfile_ix, start_line=0):
-    kernel_start = None
-    with gztool.pipe(slogdf.path[slogfile_ix], '-L', start_line) as lines:
-        for lnum, txt in enumerate(lines):
-            loads = json.loads
-            try:
-                record = loads(txt)
-            except JSONDecodeError:
-                record = {'time': -1, 'type': 'error'}
-            record = dict(record, slogfile=slogfile_ix, line=lnum)
-            ty = record['type']
-            if kernel_start:
-                # end of run?
-                if ty == 'import-kernel-finish':
-                    # we'd like to return the line number info
-                    # can we return stuff from iterators?
-                    return record
-                else:
-                    yield kernel_start, record
-            else:
-                if ty == 'import-kernel-finish':
-                    kernel_start = record
-
-
-def block_cranks(kernel_start, block_start, block_end, records):
+def block_cranks(records):
     deliveries = []
     syscalls = 0
     deliver = None
-    slogfile = kernel_start['slogfile']
-    blockHeight = block_start['blockHeight']
     for record in records:
         ty = record['type']
         if ty == 'deliver':
@@ -506,121 +536,94 @@ def block_cranks(kernel_start, block_start, block_end, records):
                           kd=deliver['kd'],
                           method=method,
                           compute=compute,
-                          blockHeight=blockHeight,
-                          slogfile=slogfile,
                           dur=dur)
             deliveries.append(detail)
-    return pd.DataFrame.from_records(deliveries)
+    if deliveries:
+        return pd.DataFrame.from_records(deliveries)
+    else:
+        return no_deliveries
 
 
-# for block in iter_blocks(iter_run(10)):
-#     work = client.submit(lambda x: x, block)
+def get_deliveries(slogAccess, ref, start, qty):
+    df = slogAccess.get_records(
+        ref, start, qty,
+        target=None, include=['deliver', 'deliver-result', 'syscall-result'])
+    if len(df) > 0 and 'syscallNum' in df.columns:
+        df = df.drop(columns=['syscallNum', 'ksr', 'vsr', 'vd'])
+        return block_cranks(df.to_dict('records'))
+    else:
+        return no_deliveries
 
-# x = next(iter_blocks(iter_run(10), types=[]))
+_g16 = _blockrun16[(_blockrun16.run == _long16.index[0]) & (_blockrun16.blockHeight == 64628)].iloc[:2]
+_run1 = _runs.loc[_long16.index[0]]
 
-# block_cranks(*x).set_index(['slogfile', 'line'], drop=True).drop(['type', 'dr', 'kd'], axis=1)
-1
-# .DataFrame(lambda _k, bs, be, _r: bs, iter_blocks(iter_run(10), types=[]))
+get_deliveries(_sa4, f'{_run1.parent}/{_run1["name"]}', _g16.iloc[0].line, _g16.iloc[1].line - _g16.iloc[0].line + 1)
 # -
 
-client.map(block_cranks, iter_blocks(iter_run(10)))
+df = dur[dur.run == _long16.index[0]].assign(length=dur.l_hi - dur.line + 1)
+df[df.length > 2].head()
 
-slogdf[10:11]
+# +
+_br2 = _blockrun16[(_blockrun16.run == _long16.index[0]) & (_blockrun16.blockHeight == 64632)].iloc[:2]
 
-# ### Runs
+get_deliveries(_sa4, f'{_run1.parent}/{_run1["name"]}',
+               _br2.iloc[0].line, _br2.iloc[1].line - _br2.iloc[0].line + 1)
+
+# +
+# chain_id, vatID, deliveryNum -> blockHeight, kd, compute
+import inspect
+
+def provide_deliveries(slogAccess, blockHeight, run, blockrun):
+    br = blockrun[(blockrun.run == run.name) & (blockrun.blockHeight == blockHeight)]
+    block_start = br.iloc[0]  # assert sign == -1?
+    block_end = br.iloc[1]
+    length = int(block_end.line - block_start.line + 1)
+    df = slogAccess.provide_data(run.parent, run['name'], int(block_start.line), length,
+                                 f'deliveries-{blockHeight}', no_deliveries,
+                                 lambda ref, start, qty: get_deliveries(slogAccess, ref, start, qty),
+                                 'gzip')
+    if 'vatID' not in df.columns or 'vd' in df.columns:
+        raise NotImplementedError(f'cols: {df.columns} block {blockHeight, int(block_start.line)}, run\n{run}')
+    return df.assign(blockHeight=blockHeight, run=run.name)
+
+provide_deliveries(_sa4, 64628, _run1, _blockrun16)
+# -
+
+# test empty
+provide_deliveries(_sa4, 64629, _run1, _blockrun16)
+
+_runs.loc[455:456]
+
+# +
+import inspect
+
+def deliveries_todo(sa, blockrun, runs):
+    todo = [
+        dask.delayed(provide_deliveries)(sa, blockHeight, run, blockrun)
+        for run_ix, run in runs.iterrows()
+        for blockHeight in blockrun[blockrun.run == run_ix].blockHeight.unique()
+    ]
+    df = dd.from_delayed(todo, meta=no_deliveries.assign(file_id=1, blockHeight=1, run=1))
+    return df.compute()
+
+_dr16 = deliveries_todo(_sa4, _blockrun16[_blockrun16.blockHeight <= 64632], _runs.loc[455:456])
+_dr16 = _dr16.assign(chain_id=16)
+_dr16
+# -
+
+df = _dr16[['chain_id', 'vatID', 'deliveryNum', 'blockHeight', 'kd', 'compute']].drop_duplicates()
+df = df.set_index(['chain_id', 'vatID', 'deliveryNum']).sort_index()
+df
+
+df[df.index.duplicated()]
+
+# ### Did we ever do more than 1000 cranks in a block?
 #
-# > split each slogfile into runs (each beginning with an import-kernel event)
+# if not, current policy never fired
 
-slog_sample = slogdf[70:120:5]
-slog_sample.drop('path', axis=1)
+df.reset_index().groupby('blockHeight')[['crankNum']].count().sort_values('crankNum', ascending=False)
 
-# +
-import json
-from json import JSONDecodeError
-
-
-def log_items(slog_row):
-    ix, detail = slog_row
-    line = [0]  # sigh... python3 _still_ doesn't have normal static scoping?
-    loads = json.loads
-    def load_numbered(txt):
-        try:
-            record = loads(txt)
-        except JSONDecodeError:
-            record = {'time': -1, 'type': 'error'}
-        line[0] = line[0] + 1
-        return dict(record, line=line[0])
-    data = db.read_text(detail.path).map(load_numbered)
-    return data.map(lambda item: dict(item, slogfile=ix))
-
-
-events4 = db.from_sequence(list(slog_sample.iterrows())).map(log_items).flatten().to_dataframe()
-
-# +
-runs = events4[events4.type == 'import-kernel-finish'].compute().reset_index()
-
-# Compute end times / lines
-runs = pd.concat([
-    runs.drop('time', axis=1),
-    runs.groupby('slogfile').apply(lambda g: pd.DataFrame(dict(start=g.time, end=g.time.shift(-1)))),
-    runs.groupby('slogfile').apply(lambda g: pd.DataFrame(dict(end_line=g.line.shift(-1))))
-], axis=1)
-
-def show_times(df, cols):
-    out = df.copy()
-    for col in cols:
-        out[col] = pd.to_datetime(out[col], unit='s')
-    return out
-
-
-show_times(runs, ['start', 'end'])
-
-# +
-import gzip
-import json
-import itertools
-
-
-def iter_types(path, types, meta=''):
-    log.info('%s/%s%s: extracting %s', path.parent.name, path.name, meta, types)
-    with gzip.open(path) as f:
-        for (ix, line) in enumerate(f):
-            try:
-                data = json.loads(line)
-            except json.JSONDecodeError:
-                log.warning('%s:%d: bad JSON: %s', path.name, ix, repr(line))
-                return
-            ty = data['type']
-            if ty in types:
-                yield ix, data
-
-
-def slog_runs(slogdf=slogdf):
-    for ix, slog in slogdf.iterrows():
-        for line, kf in iter_types(slog.path, ['import-kernel-finish'],
-                                   f' [{round(slog.st_size / 1024 / 1024, 2)}Gb]'):
-            yield dict(slogfile=ix, parent=slog.parent, name=slog['name'], line=line, **kf)
-
-runs = pd.DataFrame.from_records(slog_runs(slogdf))
-
-# Compute end times
-runs = pd.concat([
-    runs.drop('time', axis=1),
-    runs.groupby('slogfile').apply(lambda g: pd.DataFrame(dict(start=g.time, end=g.time.shift(-1))))
-], axis=1)
-
-runs.to_sql('run', db4, if_exists='replace')
-
-def show_times(df, cols):
-    out = df.copy()
-    for col in cols:
-        out[col] = pd.to_datetime(out[col], unit='s')
-    return out
-
-runs.head()
-# -
-
-show_times(runs, ['start', 'end'])
+# ## @@ Older approaches
 
 # ## Delivery statistics
 #
@@ -793,135 +796,11 @@ xwalk[xwalk.deliveryNum_y == 2801].kd_y.iloc[0]
 # when swingset tells mb device, device consults state _in RAM_ for dup ack num...
 # not durable... differs between run-from-start and restart
 
-# ## Vats
-
-vats = c500[c500.type == 'create-vat'][['vatID', 'description']]
-vats.vatID = vats.vatID.apply(lambda v: int(v[1:]))
-vats = vats.drop_duplicates()
-vats = vats.set_index('vatID', drop=True).sort_index()
-vats
-
-# ## Block Time Distribution
-
-# +
-blocks = c500[c500['type'] == 'cosmic-swingset-end-block-finish']
-
-ax = blocks[['dur']].plot(kind='hist',
-    bins=30,
-    figsize=(9, 5), log=True,
-    title=f'Block Time Distribution ({len(blocks)} blocks across 4 slogfiles)')
-ax.set_xlabel('endblock duration (sec)');
-# -
-
-# ### chain_id: agorictest-15 vs. agorictest-16
-#
-# agorictest-16 genesis was 2021-07-01 19:00:00
-
-gen16 = show_times(pd.DataFrame(dict(blockHeight=64628, blockTime=[1625166000], ts=1625166000)), ['blockTime'])
-gen16
-
-
-# It's visually obvious which chain a block is on:
-
-# +
-def block_plot(df, **kw):
-    return show_times(df, ['blockTime']).plot.scatter(x='blockTime', y='blockHeight', rot=45, **kw)    
-
-block_plot(blocks);
-
-
-# -
-
-# Let's take the average of these lines:
-
-# +
-def ez_line(df, x, y, ix):
-    x_min = df[x].min()
-    x_max = df[x].max()
-    y_min = df[y].min()
-    y_max = df[y].max()
-    [x1, x0] = np.polyfit([x_min, x_max], [y_min, y_max], 1)
-    return pd.DataFrame(dict(x1=[x1], x0=[x0]), index=[ix])
-
-
-chain_lines = pd.concat([
-    ez_line(blocks[blocks.blockTime < gen16.ts[0]], 'blockTime', 'blockHeight', 15),
-    ez_line(blocks[blocks.blockTime >= gen16.ts[0]], 'blockTime', 'blockHeight', 16)
-])
-chain_lines.mean()
-
-
-# +
-def block_plot(df, **kw):
-    return df.plot.scatter(x='blockTime', y='blockHeight', rot=45, **kw)    
-
-ax = block_plot(blocks, title='chain 16 vs 15');
-
-def add_line(x, ax, cs, figsize=(9, 6)):
-    f = np.poly1d(cs)
-    line = pd.DataFrame({'x': [x.min(), x.max()]})
-    line['y'] = f(line['x'])
-    return line.plot(x='x', y='y', color='Red', legend=False, ax=ax)
-
-add_line(blocks.blockTime, ax, chain_lines.mean()).set_xlabel('blockTime');
-# -
-
-# Now we can assign `chain_id` based on whether we're above or below the dividing line:
-
-split = np.poly1d(chain_lines.mean())(c500.blockTime)
-c500['chain_id'] = np.where(c500.blockHeight.isnull(), np.nan, np.where(c500.blockHeight < split, 16, 15))
-c500[c500.type == 'deliver-result'][['blockTime', 'blockHeight', 'chain_id', 'vatID', 'deliveryNum']]
-
-
-# Let's check that within a chain, `blockHeight` uniquely determines `blockTime`:
-
-# +
-def group_count(df, by, col):
-    stats = df.groupby(by)[[col]].agg('nunique')
-    stats = stats.sort_values(col, ascending=False)
-    return stats
-
-block_dup = group_count(c500, ['chain_id', 'blockHeight'], 'blockTime')
-block_dup[block_dup.blockTime > 1]
-# -
-
-# And likewise, that `crankNum` determines `blockHeight`:
-
-block_dup = group_count(c500[(c500.type == 'deliver-result')], ['chain_id', 'crankNum'], 'blockHeight')
-block_dup[block_dup.blockHeight > 1]
-
-# +
-x = show_times(
-    c500[c500.crankNum == 47111].sort_values('blockHeight').drop(['description', 'managerType', 'time_start'], axis=1),
-    ['time', 'time_kernel'])
-
-x.to_csv('crank_47111_dup.csv')
-x
-# -
-
-# @@ so focus on `deliveryNum` (esp not vatTP)
-
-# ### Runs
-#
-# > split each slogfile into runs (each beginning with an import-kernel event)
-
-# +
-runs = c500[['slogfile', 'time_kernel', 'chain_id']].dropna().drop_duplicates().reset_index(drop=True)
-
-show_times(runs, ['time_kernel'])
-# -
-
 # ## global crankNum -> vatID, deliveryNum
 
 cranks = c500[c500['type'] == 'deliver-result']
 cranks = cranks[['chain_id', 'crankNum', 'vatID', 'deliveryNum']].set_index(['chain_id', 'crankNum']).drop_duplicates().sort_index()
 cranks # .sort_values('deliveryNum')
-
-# ### Did we ever do more than 1000 cranks in a block?
-#
-# if not, current policy never fired
-
-cranks.reset_index().groupby('blockHeight')[['crankNum']].count().sort_values('crankNum', ascending=False)
 
 c500 = c500[~c500.line.isnull()]
 show_times(c500[c500.blockHeight == 64628], ['time', 'time_start', 'blockTime'])

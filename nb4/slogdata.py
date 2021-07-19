@@ -98,13 +98,14 @@ class SlogAccess:
                                 line=[0])).iloc[:0]
 
     def provide_runs(self, parent, name, start, qty):
-        return self._provide_data(parent, name, start, qty,
-                                  'runs', self.no_runs, self.get_runs)
+        return self.provide_data(parent, name, start, qty,
+                                 'runs', self.no_runs, self.get_runs)
 
-    def _provide_data(self, parent, name, start, qty,
-                      kind, none, get):
+    def provide_data(self, parent, name, start, qty,
+                     kind, none, get, compress=None):
         path = self.__slogdir / parent / name
-        dest = self.__slogdir / parent / f'{path.stem}-{start}-{kind}.csv'
+        gz = '.gz' if compress == 'gzip' else ''
+        dest = self.__slogdir / parent / f'{path.stem}-{start}-{kind}.csv{gz}'
         if dest.exists():
             # dtype is important for empty CSV files
             dtype = dict(none.assign(file_id=0).dtypes)
@@ -129,7 +130,7 @@ class SlogAccess:
                                   line=[0])).iloc[:0]
 
     def provide_blocks(self, parent, name, start, qty):
-        df = self._provide_data(parent, name, start, qty,
+        df = self.provide_data(parent, name, start, qty,
                                 'blocks', self.no_blocks, self.get_blocks)
         df = df.assign(sign=np.where(
             df.type == 'cosmic-swingset-end-block-start', -1, 1))
