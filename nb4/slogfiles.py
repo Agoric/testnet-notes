@@ -503,7 +503,7 @@ no_deliveries = pd.DataFrame.from_records([
      'dr': object(),
      'syscalls': 2,
      'method': 'inbound',
-     'compute': 119496,
+     'compute': 119496.0,  # missing compute is possible... from replay.
      'dur': 0.1912224292755127,
     }]).iloc[:0]
 no_deliveries.dtypes
@@ -530,7 +530,7 @@ def block_cranks(records):
         elif ty == 'deliver-result':
             dur = record['time'] - deliver['time']
             method = deliver['kd'][2]['method'] if deliver['kd'][0] == 'message' else None
-            compute = record['dr'][2]['compute'] if type(record['dr'][2]) is type({}) else None            
+            compute = record['dr'][2]['compute'] if type(record['dr'][2]) is type({}) else pd.nan
             detail = dict(record,
                           syscalls=syscalls,
                           kd=deliver['kd'],
@@ -546,7 +546,7 @@ def block_cranks(records):
 
 def get_deliveries(slogAccess, ref, start, qty):
     df = slogAccess.get_records(
-        ref, start, qty,
+        ref, int(start), int(qty),
         target=None, include=['deliver', 'deliver-result', 'syscall-result'])
     if len(df) > 0 and 'syscallNum' in df.columns:
         df = df.drop(columns=['syscallNum', 'ksr', 'vsr', 'vd'])
@@ -561,7 +561,28 @@ get_deliveries(_sa4, f'{_run1.parent}/{_run1["name"]}', _g16.iloc[0].line, _g16.
 # -
 
 df = dur[dur.run == _long16.index[0]].assign(length=dur.l_hi - dur.line + 1)
-df[df.length > 2].head()
+# df[df.length > 2].head(10)
+df[df.dur > 5].head(10)
+
+
+# +
+# https://avi.im/blag/2021/fast-sqlite-inserts/
+def run_sql(script, engine):
+    for stmt in script.strip().split(';\n'):
+        engine.execute(stmt)
+
+run_sql('''
+PRAGMA journal_mode = OFF;
+PRAGMA synchronous = 0;
+PRAGMA cache_size = 1000000;
+PRAGMA locking_mode = NORMAL;
+PRAGMA temp_store = MEMORY;
+''', db4)
+# -
+
+len(dur)
+
+dur.to_sql('blockrun16dur', db4, if_exists='replace', chunksize=25000, index=False)
 
 # +
 _br2 = _blockrun16[(_blockrun16.run == _long16.index[0]) & (_blockrun16.blockHeight == 64632)].iloc[:2]
@@ -575,6 +596,8 @@ import inspect
 
 def provide_deliveries(slogAccess, blockHeight, run, blockrun):
     br = blockrun[(blockrun.run == run.name) & (blockrun.blockHeight == blockHeight)]
+    if len(br) < 2:
+        return no_deliveries.assign(file_id=-1, blockHeight=blockHeight, run=run.name)
     block_start = br.iloc[0]  # assert sign == -1?
     block_end = br.iloc[1]
     length = int(block_end.line - block_start.line + 1)
@@ -586,7 +609,7 @@ def provide_deliveries(slogAccess, blockHeight, run, blockrun):
         raise NotImplementedError(f'cols: {df.columns} block {blockHeight, int(block_start.line)}, run\n{run}')
     return df.assign(blockHeight=blockHeight, run=run.name)
 
-provide_deliveries(_sa4, 64628, _run1, _blockrun16)
+provide_deliveries(_sa4, 66371, _run1, _blockrun16)
 # -
 
 # test empty
@@ -594,34 +617,103 @@ provide_deliveries(_sa4, 64629, _run1, _blockrun16)
 
 _runs.loc[455:456]
 
+cluster.scale(8)
+
 # +
 import inspect
+from slogdata import show_times
+
+db4.execute('drop table if exists crankrun') #@@
 
 def deliveries_todo(sa, blockrun, runs):
-    todo = [
-        dask.delayed(provide_deliveries)(sa, blockHeight, run, blockrun)
+    todo = (
+        dask.delayed(provide_deliveries)(sa, blockHeight, run,
+                                         blockrun[(blockrun.run == run.name) &
+                                                  (blockrun.blockHeight == blockHeight)])
         for run_ix, run in runs.iterrows()
-        for blockHeight in blockrun[blockrun.run == run_ix].blockHeight.unique()
-    ]
+        for heights in [blockrun[blockrun.run == run_ix].blockHeight.unique()]
+        for _ in [log.info('run %s %-3d blocks %.16s %s', run_ix, len(heights),
+                           pd.to_datetime(run.time, unit='s'), run['name'])]
+        for blockHeight in heights
+    )
+    log.info('todo: %s', type(todo))
     df = dd.from_delayed(todo, meta=no_deliveries.assign(file_id=1, blockHeight=1, run=1))
     return df.compute()
 
-_dr16 = deliveries_todo(_sa4, _blockrun16[_blockrun16.blockHeight <= 64632], _runs.loc[455:456])
-_dr16 = _dr16.assign(chain_id=16)
+_dr16 = provide_table(
+    db4, 'crankrun',
+    #  65517
+    lambda: deliveries_todo(_sa4, _blockrun16[_blockrun16.blockHeight <= 65000], _runs.loc[200:275]))
 _dr16
 # -
 
-df = _dr16[['chain_id', 'vatID', 'deliveryNum', 'blockHeight', 'kd', 'compute']].drop_duplicates()
+_dr16 = deliveries_todo(_sa4, _blockrun16[_blockrun16.blockHeight <= 65000], _runs.loc[200:275])
+
+_alld16 = dd.read_csv('slogfiles/**/*-deliveries-*.csv.gz', blocksize=None,
+                     dtype=dict(no_deliveries.assign(file_id=0).dtypes))
+_alld16.head()
+
+# ## Are compute meter values consistent?
+
+client.restart()
+
+
+# +
+def load_deliveries(files, con, table):
+    if_exists = 'replace'
+    for file in files:
+        df = pd.read_csv(file)
+        df.to_sql(table, con, if_exists=if_exists)
+        if_exists = 'append'
+        log.info('loaded %d records from %s', len(df), file)
+
+load_deliveries(
+    _dir('slogfiles/').glob('**/*-deliveries-*.csv.gz'),
+    db4,
+    'delrun3')
+# -
+
+gen16
+
+show_times(pd.read_sql('select * from compute_mismatch', db4))
+
+
+# +
+def compute_meter_consistent(df):
+    compute_count = df.groupby(['vatID', 'deliveryNum'])[['compute']].count()
+    dups = compute_count[compute_count['compute'] > 1]
+    return dups.reset_index().join(df[['file_id', 'line', 'vatID', 'deliveryNum', 'compute']],
+                            how='left', lsuffix='_dup')
+
+x = compute_meter_consistent(_alld16).compute()
+x
+# -
+
+x.groupby(['vatID', 'deliveryNum', 'compute'])[['line']].count().sort_index().tail(30)
+
+df = _dr16.assign(chain_id=16)
+df = df[['chain_id', 'vatID', 'deliveryNum', 'blockHeight', 'kd', 'compute']].drop_duplicates()
 df = df.set_index(['chain_id', 'vatID', 'deliveryNum']).sort_index()
+df[df.index.duplicated()]
 df
 
-df[df.index.duplicated()]
+df.loc[16].loc['v1'].loc[0]
+
+_dr16.query('(deliveryNum == 0) & (vatID == "v1")').groupby('compute')[['line']].count()
+
+pd.merge(_dr16,
+         df[df.index.duplicated()].reset_index()[['vatID', 'deliveryNum']],
+         left_on=['vatID', 'deliveryNum'], right_on=['vatID', 'deliveryNum']
+        )[['vatID', 'deliveryNum', 'blockHeight', 'kd', 'compute']]
+# _dr16.assign(chain_id=16).set_index(['chain_id', 'vatID', 'deliveryNum'])
+
 
 # ### Did we ever do more than 1000 cranks in a block?
 #
 # if not, current policy never fired
 
-df.reset_index().groupby('blockHeight')[['crankNum']].count().sort_values('crankNum', ascending=False)
+df = _dr16[['blockHeight', 'crankNum']].drop_duplicates()
+df.groupby('blockHeight')[['crankNum']].count().sort_values('crankNum', ascending=False)
 
 # ## @@ Older approaches
 
