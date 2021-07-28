@@ -242,11 +242,6 @@ df.set_index('name')[['runs']][::5].plot.barh(
 gen16 = show_times(pd.DataFrame(dict(blockHeight=64628, blockTime=[1625166000], ts=1625166000)), ['blockTime'])
 gen16
 
-# ## Separate runs by chain
-
-_runs['chain'] = np.where(_runs.time >= gen16.ts[0], 16, 15)
-_runs.groupby('chain')[['file_id', 'lines']].count()
-
 # ## Block end start / finish events
 
 # +
@@ -261,6 +256,53 @@ _sa4 = SlogAccess(_dir('/home/customer/t4/slogfiles'),
 show_times(
     _sa4.provide_blocks('ChainodeTech', 'agorictest-16_chain.slog.gz', 1, 1000000)
 )
+
+
+# -
+
+# ## Separate runs by chain
+
+# +
+def first_block(sa, run,
+                head=5000,
+                ts=gen16.ts[0]):
+    log.info('1st block: %s/%s', run.parent, run['name'])
+    qty = min(int(run.line_end) - run.line + 1, head)
+    df = sa.get_blocks(f'{run.parent}/{run["name"]}', run.line, qty)[:2]
+    if not len(df):
+        return pd.DataFrame.from_records([dict(
+            blockHeight=-1,
+            blockTime=-1,
+            run=run.name,
+            chain=np.nan)], index=[run.name])
+    df = df.assign(run=run.name,
+                   chain=16 if df.blockTime[0] >= ts else 15)
+    return df
+
+show_times(first_block(_sa4, _runs.loc[0]))
+
+
+# +
+def run2chain(sa, runs):
+    df = runs.apply(lambda run: first_block(sa, run).iloc[0][['blockHeight', 'blockTime', 'chain']],
+                    axis=1)
+    return df
+
+_r2c = run2chain(_sa4, _runs)
+_r2c
+# -
+
+_runchain = pd.concat([_runs.drop(columns=['index']), _r2c], axis=1)
+_runchain.to_sql('runchain', db4)
+_runchain.groupby('chain')[['line']].count()
+
+# !sqlite3 slog4.db '.header on' '.mode column' 'select * from runchain limit 3'
+
+_runchain = pd.read_sql('runchain', db4)
+_runchain.groupby('chain')[['line']].count()
+
+_runs['chain'] = _runchain.chain
+_runs.groupby('chain')[['file_id', 'lines']].count()
 
 
 # +
@@ -533,9 +575,12 @@ def block_cranks(records):
         elif ty == 'syscall-result':
             syscalls += 1
         elif ty == 'deliver-result':
+            if not deliver:
+                log.warn('no deliver? %s', record)
+                continue
             dur = record['time'] - deliver['time']
             method = deliver['kd'][2]['method'] if deliver['kd'][0] == 'message' else None
-            compute = record['dr'][2]['compute'] if type(record['dr'][2]) is type({}) else pd.nan
+            compute = record['dr'][2]['compute'] if type(record['dr'][2]) is type({}) else np.nan
             detail = dict(record,
                           syscalls=syscalls,
                           kd=deliver['kd'],
@@ -550,11 +595,14 @@ def block_cranks(records):
 
 
 def get_deliveries(slogAccess, ref, start, qty):
+    if qty <= 2:  # just block start, block end
+        return no_deliveries
     df = slogAccess.get_records(
         ref, int(start), int(qty),
         target=None, include=['deliver', 'deliver-result', 'syscall-result'])
     if len(df) > 0 and 'syscallNum' in df.columns:
-        df = df.drop(columns=['syscallNum', 'ksr', 'vsr', 'vd'])
+        for c in ['syscallNum', 'ksr', 'vsr', 'vd']:
+            df = df.drop(columns=list(set(df.columns) & set(['syscallNum', 'ksr', 'vsr', 'vd'])))
         return block_cranks(df.to_dict('records'))
     else:
         return no_deliveries
@@ -611,7 +659,7 @@ def provide_deliveries(slogAccess, blockHeight, run, blockrun):
                                  lambda ref, start, qty: get_deliveries(slogAccess, ref, start, qty),
                                  'gzip')
     df = df.assign(chain=run.chain, blockHeight=blockHeight, run=run.name)
-    if df.dtypes['chain'] != 'int64' or 'vatID' not in df.columns or 'vd' in df.columns:
+    if df.dtypes['chain'] not in ['int64', 'float64'] or 'vatID' not in df.columns or 'vd' in df.columns:
         raise NotImplementedError(f'cols: {df.columns} dtypes: {df.dtypes} block {blockHeight, int(block_start.line)}, run\n{run}')
     return df
 
@@ -629,9 +677,207 @@ provide_deliveries(_sa4, 64629, _run1, _blockrun16)
 
 _runs.loc[455:456]
 
+# ## Cranks in one long run starting at agorictest-16 genesis
+
+gen16
+
+df = pd.read_sql("""
+with lo as (
+    select *
+         , time - blockTime delta
+    from blockrun16
+    where blockHeight = 64628
+    and blockTime = 1625166000
+    and sign = -1
+    and run is not null
+), hi as (
+    select run, max(blockHeight) hi, max(blockTime) t_hi
+    from blockrun16
+    where run is not null
+    and sign = -1
+    group by run
+), agg as (
+    select lo.*, hi.hi, hi.t_hi
+    from lo join hi on lo.run = hi.run
+    where abs(delta) < 7
+    order by hi.t_hi desc
+)
+select agg.*, run.parent, run.name
+from agg
+join run on agg.run = run."index"
+limit 5
+""", db4)
+show_times(df, ['time', 'blockTime', 't_hi'])
+
+show_times(_runs).loc[445]
+
+# +
+import json
+
+
+def run1_deliveries(con, sa, lo, hi, run, br,
+                    json_cols=['kd', 'dr'],
+                    table='run1'):
+    if sqla.inspect(con).has_table(table):
+        lo = pd.read_sql(f'select max(blockHeight) + 1 lo from {table}', con).iloc[0].lo
+        if_exists = 'append'
+    else:
+        if_exists = 'replace'
+    for blockHeight in range(lo, hi):
+        df = provide_deliveries(sa, blockHeight, run, br)
+        if not len(df):
+            # log.info('block %d: no deliveries', blockHeight)
+            continue
+        for col in json_cols:
+            df[col] = df[col].apply(json.dumps)
+        log.info('block %d of %d: %s += %d rows', blockHeight, hi, table, len(df))
+        df.to_sql(table, con, if_exists=if_exists, index=False)
+        if_exists = 'append'
+
+
+run1_deliveries(db4, _sa4, 64628, 90530, _runs.loc[445], _blockrun16)
+# -
+
+_run1 = df = pd.read_sql_table('run1', db4)
+_run1.tail(3)
+
+_run1[['blockHeight']]
+
+
+# +
+def drate(df):
+    # rate = df.compute / (df.syscalls + 1) / df.dur
+    rate = df.compute / df.dur
+    return df.assign(rate=rate)
+
+df = drate(_run1).groupby('method')[['rate']].aggregate(['count', 'mean', 'std', 'max'])
+df = df.sort_values(('rate', 'mean'), ascending=False)
+df
+
+
+# +
+def sim(df, rate):
+    df = df[df.chain == 16]
+    df['running'] = df.compute.cumsum()
+    df['sim_blk'] = (df.running / rate).round()
+    df['adj'] = df.sim_blk - df.blockHeight
+    return df.reset_index(drop=True)
+
+df = _run1.drop(columns=['type', 'kd', 'dr', 'file_id', 'line', 'run'])
+df = df[df.method != 'executeContract']
+df.blockHeight = df.blockHeight - df.blockHeight[3]
+df = sim(df, 1e7)
+df = df[df.sim_blk.notnull()]
+df.sim_blk = df.sim_blk.astype('int64')
+show_times(df).head()
+
+# +
+# df.groupby('method')[['compute']].describe().loc['executeContract']
+# -
+
+df.compute.hist(log=True);
+
+# #### Total delivery duration per block
+
+x = pd.concat([
+    df.groupby('blockHeight')[['dur']].sum(),
+    df.groupby('sim_blk')[['dur']].sum().rename(columns=dict(dur='dur_sim')),
+], axis=1)
+x.hist();
+
+x.describe()
+
+# #### Total compute per block
+
+x = pd.concat([
+    df.groupby('blockHeight')[['compute']].sum(),
+    df.groupby('sim_blk')[['compute']].sum().rename(columns=dict(compute='cmp_sim')),
+], axis=1)
+x.hist();
+
+df[['rate']].plot.barh(subplots=True, log=True, figsize=(12, 12))
+
+pd.read_sql_table('run1', db4)
+
 cluster.scale(8)
 
 client.restart()
+
+f'{12:04}'
+
+
+# +
+def pick_chain(ht,
+               gen=1625166000, hi=16, lo=15):
+    return np.where(ht > gen, hi, lo)
+
+
+def run_deliveries(slogs, sa, run):
+    chain_id = f'agorictest-{run.chain}'
+    blocks = pd.concat(
+        pd.read_csv(blockFile)
+        for blockFile in (slogs / run.parent).glob('*-blocks.csv')
+    )
+    blocks = blocks[(blocks.line >= run.line) &
+                    (blocks.line < run.line_end)]
+    blocks = blocks.assign(run=run.name)
+    heights = blocks.blockHeight.unique()
+    log.info('run %s %-3d blocks %.16s %s', run.name, len(heights),
+             pd.to_datetime(run.time, unit='s'), run['name'])
+    tot = 0
+    for blockHeight in heights:
+        detail = provide_deliveries(sa, blockHeight, run, blocks)
+        if not len(detail):
+            continue
+        tot += len(detail)
+        yield detail
+    if not tot:
+        yield no_deliveries.assign(file_id=-1, chain=-1, blockHeight=-1, run=run.name)
+
+
+def by_vat(dest, run, detail):
+    chain_id = f'agorictest-{run.chain}'
+    run_detail = f'{run.name:04}-{run.parent}-{run.file_id}-{run.line}'
+    for vatID, g in detail.groupby('vatID'):
+        try:
+            (dest / chain_id / vatID).mkdir(parents=True)
+        except:
+            pass
+        vat_dir = dest / chain_id / vatID
+        f = vat_dir / f'delivery-detail-{run_detail}.csv.gz'
+        log.info('saving to %s:\n%s', f, g.set_index(['vatID', 'deliveryNum'])[['compute', 'dur']].tail(3))
+        g.to_csv(f, index=False)
+        f = vat_dir / f'delivery-summary-{run_detail}.csv.gz'
+        g[['vatID', 'deliveryNum', 'kd', 'syscalls', 'compute']].to_csv(f, index=False)
+    return detail.assign(run=run.name).groupby(['run', 'vatID'])[['deliveryNum']].count()
+
+#by_vat(_dir('slogfiles/'), _dir('vat-details/'), _sa4, _runs)
+
+for df in run_deliveries(_dir('slogfiles/'), _sa4, _runs.loc[58]):
+    print(df)
+    print(by_vat(_dir('vat-details/'), _runs.loc[58], df))
+    break
+
+
+# +
+def run_deliveries_todo(sa, slogs, dest, runs):
+    def do_run(run):
+        df = pd.concat(
+            detail
+            for detail in run_deliveries(slogs, sa, run)
+        )
+        return by_vat(dest, run, df)
+    todo = (
+        dask.delayed(do_run)(run)
+        for _, run in runs.iterrows()
+    )
+    return todo
+
+per_run = dd.from_delayed(run_deliveries_todo(_sa4, _dir('slogfiles/'), _dir('vat-details/'), _runs))
+per_run.compute()
+# -
+
+pd.to_datetime(1625213913.1672082, unit='s')
 
 # +
 import inspect
@@ -664,9 +910,13 @@ _dr16 = deliveries_todo(_sa4, _blockrun16,  # [_blockrun16.blockHeight <= 65000]
                         _runs[_runs.chain == 16])
 
 _dr16
-
-
 # -
+
+# ## deliveries from batch
+
+_delrun = pd.read_sql('select * from delrun', db4)
+_delrun.groupby('chain')[['line']].count()
+
 
 # ## Are compute meter values consistent?
 
@@ -674,17 +924,136 @@ _dr16
 def compute_meter_consistent(df):
     compute_count = df.groupby(['vatID', 'deliveryNum'])[['compute']].nunique()
     dups = compute_count[compute_count['compute'] > 1]
-    return dups.reset_index().join(df[['file_id', 'line', 'run', 'vatID', 'deliveryNum', 'compute']],
-                            how='left', lsuffix='_dup')
+    return pd.merge(dups.reset_index(),
+                    df[['run', 'vatID', 'deliveryNum', 'compute']],
+                    how='left', suffixes=['_dup', ''],
+                    left_on=['vatID', 'deliveryNum'],
+                    right_on=['vatID', 'deliveryNum'])
 
 # x = compute_meter_consistent(_alld16).compute()
-x = compute_meter_consistent(_dr16)  # .compute()
+x = compute_meter_consistent(_delrun[_delrun.chain == 16]).sort_values(['vatID', 'deliveryNum'])  # .compute()
 x
-
-
 # -
 
+compute_meter_consistent(_delrun[_delrun.chain == 15]).sort_values(['vatID', 'deliveryNum'])  # .compute()
+
+# ## Computrons per block
+
+blockdel = _delrun[_delrun.method != 'executeContract']
+key = ['chain', 'blockHeight', 'vatID', 'deliveryNum', 'compute']
+blockdel = blockdel.sort_values(key).drop_duplicates()
+df = blockdel.groupby(['chain', 'blockHeight'])[['deliveryNum']].count().sort_index()
+df.plot()
+
+_bkcomp = df = blockdel.groupby(['chain', 'blockHeight'])[['compute']].sum()
+df
+
+df.plot()
+
+
+# +
+def type2sign(df):
+    df['sign'] = np.where(df.type == 'cosmic-swingset-end-block-start', -1, 1)
+    return df
+
+def byChain(df, gen=gen16.ts[0], hi=16, lo=15):
+    return df.assign(chain=np.where(df.blockTime >= gen, hi, lo))
+    return df
+
+def slog_blocks(slogfiles,
+                pattern='**/*-blocks.csv'):
+    df = pd.concat(type2sign(pd.read_csv(p)[['type', 'blockHeight', 'blockTime']])
+                   for p in slogfiles.glob(pattern))
+    df = byChain(df)
+    key = ['chain', 'blockHeight', 'blockTime']
+    df = df[key].sort_values(key).drop_duplicates()
+    return df.reset_index(drop=True)
+
+_blk = slog_blocks(_dir('slogfiles/'))    
+_blk.tail()
+# -
+
+_byChain = _blk.groupby('chain')
+df = pd.merge(
+    _byChain[['blockHeight']].nunique(),
+    _byChain[['blockHeight']].aggregate(['min', 'max'])['blockHeight'],
+    left_index=True, right_index=True,
+)
+df['span'] = df['max'] - df['min'] + 1
+df
+
+
+# +
+def blockdur(df):
+    df = df.set_index(['chain', 'blockHeight'])
+    df['dur'] = df.shift(-1).blockTime - df.blockTime
+    return df
+
+_bkdur = blockdur(_blk)
+_bkdur
+# -
+
+# compute by block with duration
+_bkcmpdur = _bkcomp.join(_bkdur, lsuffix='_d', rsuffix='_b')
+_bkcmpdur['rate'] = (_bkcmpdur.compute / _bkcmpdur.dur).astype(float)
+_bkcmpdur
+
+_bkcmpdur[_bkcmpdur.dur > _bkcmpdur.dur.quantile(0.99)]
+
+df = _bkcmpdur.loc[16]
+df[df.dur < 8][['rate']].hist(log=True)
+
+_bkcmpdur[_bkcmpdur.dur < 8][['rate']].describe()
+
+# ## simulation
+
+_delrun.groupby('run')[['line']].count()
+
+_delrun[['crankNum', 'run']].groupby(['crankNum'])[['run']].aggregate(['count']).plot()
+
+
+# +
+def sim(df, percentile):
+    df = df[df.chain == 16]
+    df = df[df.method != 'executeContract']
+    key = ['blockHeight', 'crankNum', 'vatID', 'deliveryNum', 'compute']
+    df = df.groupby(key)[['dur']].aggregate(['count', 'mean', 'median', 'sum'])
+    return df
+    df = df[['blockHeight', 'crankNum', 'vatID', 'deliveryNum', 'compute']].sort_values(
+        ['blockHeight', 'crankNum', 'vatID', 'deliveryNum']).drop_duplicates()
+    threshold = df.compute.quantile(percentile)
+    df['running'] = df.compute.cumsum()
+    df['sim_block'] = (df.running / threshold).round()
+    return df.reset_index(drop=True)
+
+df = sim(_run1, .99)
+df
+# -
+
+df[['blockHeight']].plot()
+
+df.set_index('blockHeight')[['sim_block']].plot()
+
 # ## Compute rate by vat
+
+plt.cm.rainbow[1]
+
+pd.Categorical(_delrun.method.dropna(), ordered=True)
+
+# +
+import matplotlib as plt
+
+def cmap_of(df, color,
+            cmap=plt.cm.get_cmap('hot')):
+    df = df.loc[:, [color]].fillna('???')
+    byColor = df.groupby(color).count() #.set_index(color)
+    byColor['unit'] = range(len(byColor))
+    byColor.unit = byColor.unit / len(byColor)
+    byColor['color'] = byColor.unit.apply(cmap)
+    return byColor.loc[df[color]].color
+
+cmap_of(_delrun, 'method')
+
 
 # +
 def vat_rate(df, vatID):
@@ -701,10 +1070,13 @@ def show_rate(df, vatID, figsize=(8, 9)):
     df = vat_rate(df, vatID)
     ax = df.plot(subplots=True, figsize=figsize)
     
-def fit_line(df, x, y, figsize=(9, 6)):
+def fit_line(df, x, y, color=None, figsize=(9, 6)):
+    df = df[~df[x].isnull() & ~df[y].isnull()]
     cs = np.polyfit(df[x], df[y], 1)
     f = np.poly1d(cs)
-    ax1 = df[[x, y]].plot.scatter(x=x, y=y, figsize=figsize)
+    if color:
+        color = cmap_of(df, color)
+    ax1 = df[[x, y]].plot.scatter(x=x, y=y, color=color, figsize=figsize)
     df['fit'] = f(df[x])
     df.plot(x=x, y='fit', color='Red', legend=False, ax=ax1);
 
@@ -717,15 +1089,13 @@ def fit_line(df, x, y, figsize=(9, 6)):
 # fastSlog[fastSlog.vatID == 'v10'].drop(['kd', 'dr'], axis=1) #.sort_values('compute', ascending=False)
 #fastSlog[fastSlog.vatID == 'v10'].set_index('deliveryNum').sort_index()[['compute', 'dur']].plot(subplots=True)
 
-fastSlog = _dr16[_dr16.run == 903]
-fit_line(vat_rate(fastSlog, 'v10'), 'compute', 'dur')
-
-
+fit_line(_delrun[_delrun.chain == 16], 'compute', 'dur', color='method')
 # -
 
-# !python -m pip install statsmodels --user
+_r = _delrun[['compute', 'dur', 'method']].assign(rate=_delrun.compute / _delrun.dur)
+_r.groupby('method')[['rate']].describe().sort_values(('rate', 'mean'))
 
-import statsmodels.api as sm
+df.sort_values(('compute', 'mean'))
 
 df = fastSlog[fastSlog.vatID == 'v10']
 df['rate'] = df.compute / df.dur
