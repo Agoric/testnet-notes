@@ -375,6 +375,10 @@ where chain = 16
 b16time['delta'] = b16time.shift(-1).blockTime - b16time.blockTime
 b16time[['delta']].describe()
 
+b16time[b16time.index < 90527].delta.max()
+
+b16time[b16time.delta == 120]
+
 b16time[['delta']].plot(
     title='agorictest-16 consensus blockTime delta',
     ylabel='sec',
@@ -735,41 +739,140 @@ def run1_deliveries(con, sa, lo, hi, run, br,
         if_exists = 'append'
 
 
-run1_deliveries(db4, _sa4, 64628, 90530, _runs.loc[445], _blockrun16)
+run1_deliveries(db4, _sa4, 64628, 75000, _runs.loc[445], _blockrun16)
+# run1_deliveries(db4, _sa4, 75000, 90530, _runs.loc[445], _blockrun16, table='run1b')
 # -
 
-_run1 = df = pd.read_sql_table('run1', db4)
-_run1.tail(3)
+_run1 = df = pd.read_sql('select * from run1 union all select * from run1b', db4)
+show_times(_run1.tail(3))
 
-_run1[['blockHeight']]
+_run1.blockHeight.describe()
+
+_run1[_run1.blockHeight >= 88296 - 2].sort_values('blockHeight').head(30).drop(columns=['kd', 'dr', 'file_id'])
+
+df = _run1[_run1.blockHeight == 88295].sort_values('dur', ascending=False).drop(columns=['kd', 'dr', 'file_id'])
+df.head(10)
+
+df[df.dur >= 1]
+
+# TODO: compare `getPayout` here (in 88295) vs something earlier... same computrons? same duration?
+#
+# e.g. if harden weakset grew, the duration could grow while keeping computrons constant
+
+_run1[_run1.method == 'getPayout'][['compute', 'dur']].describe()
+
+_run1[_run1.method == 'getPayout'].compute.hist()
+
+_run1[(_run1.method == 'getPayout') & (_run1.compute == 31654)].plot.scatter(x='blockHeight', y='dur')
+
+lg = _run1[_run1.blockHeight > 76000]
+lg = lg[lg.dur < 1]
+lg[(lg.method == 'getPayout') & (lg.compute == 31654)].plot.scatter(x='blockHeight', y='dur')
+
+# Things got slower over time.
+#
+# Hypothesis: GC didn't happen -> weak set got big -> weakset access time got big
+
+# So computron model should not be based on this range, but rather on pre-loadgen time.
+
+# When looking at comptron / wallclock, we should look at:
+#
+#  - all getCurrentAmount calls
+#  - within a narrow range of blockHeight
+#  - that all use the same # of computrons
+#
+# (as above)
+#
+
+b16time[b16time.delta == 224]
+
+_run1[['compute', 'dur']].describe()
 
 
 # +
 def drate(df):
-    # rate = df.compute / (df.syscalls + 1) / df.dur
-    rate = df.compute / df.dur
+    rate = df.compute / (df.syscalls + 1) / df.dur
+    # rate = df.compute / df.dur
     return df.assign(rate=rate)
 
 df = drate(_run1).groupby('method')[['rate']].aggregate(['count', 'mean', 'std', 'max'])
 df = df.sort_values(('rate', 'mean'), ascending=False)
 df
+# -
 
+common = _run1.groupby('method')[['line']].count()
+common = common[common.line > 20]
+common
+
+drate(_run1[_run1.method.isin(common.index)])[['method', 'rate']].boxplot(by='method', rot=90, figsize=(20, 12))
+
+common.sort_values('line', ascending=False).head()
+
+_run1.blockHeight.describe()
+
+_run1.sort_values('dur', ascending=False)
+
+
+# This is an always-busy sim, but **TODO** we'd like to look at the arrival pattern that we have.
 
 # +
-def sim(df, rate):
+def sim(df, c_eg, dur_eg, target):
     df = df[df.chain == 16]
-    df['running'] = df.compute.cumsum()
-    df['sim_blk'] = (df.running / rate).round()
-    df['adj'] = df.sim_blk - df.blockHeight
+    df['running'] = df.compute.cumsum()  # try exp
+    threshold = target * (c_eg / dur_eg)
+    log.info('threshold: %s', threshold)
+    df['sim_blk'] = (df.running / threshold).round()
+    # df['adj'] = df.sim_blk - df.blockHeight
     return df.reset_index(drop=True)
 
 df = _run1.drop(columns=['type', 'kd', 'dr', 'file_id', 'line', 'run'])
-df = df[df.method != 'executeContract']
-df.blockHeight = df.blockHeight - df.blockHeight[3]
-df = sim(df, 1e7)
+# df = df[df.method != 'executeContract']
+# df = df[df.method == 'getCurrentAmount']  # getPayout
+
+# df.blockHeight = df.blockHeight - df.blockHeight.iloc[0]
+df = sim(df, 48390.0, 0.074363, 5)
 df = df[df.sim_blk.notnull()]
 df.sim_blk = df.sim_blk.astype('int64')
-show_times(df).head()
+show_times(df)
+# -
+
+pd.read_sql('''
+select count(distinct run)
+from blockrun16
+''', db4)
+
+len(_runs)
+
+
+# +
+def nth_block(sa, blockHeight, run, blockrun,
+              ts=gen16.ts[0]):
+    log.info('%d th block: %s/%s', blockHeight, run.parent, run['name'])
+    br = blockrun[(blockrun.blockHeight == blockHeight) & (blockrun.run == run.name)]
+    df = provide_deliveries(sa, blockHeight, run, br)
+    if not len(df):
+        return df
+    df = df.assign(run=run.name, chain=run.chain)
+    return df
+
+
+m1b1 = pd.concat(
+    df
+    for _, run in _runs.iterrows()
+    for df in [nth_block(_sa4, 80001, run, _blockrun16)]
+    if len(df)
+)
+m1b1
+# -
+
+m1b1[(m1b1.method == 'getCurrentAmount') & (m1b1.deliveryNum == 44721)][['compute', 'dur', 'run']]
+
+df = m1b1[(m1b1.method == 'getCurrentAmount') & (m1b1.deliveryNum == 44721)][['compute', 'dur', 'run']]
+df.describe()
+
+# ## Validator speed: 2-4x spread for `getCurrentAmount`
+
+df[['dur']].hist()
 
 # +
 # df.groupby('method')[['compute']].describe().loc['executeContract']
@@ -777,15 +880,50 @@ show_times(df).head()
 
 df.compute.hist(log=True);
 
+df.dur.hist(log=True);
+
+df[df.dur < .1].dur.hist()
+
 # #### Total delivery duration per block
 
 x = pd.concat([
     df.groupby('blockHeight')[['dur']].sum(),
     df.groupby('sim_blk')[['dur']].sum().rename(columns=dict(dur='dur_sim')),
 ], axis=1)
-x.hist();
+x.hist(); # log=True);
 
 x.describe()
+
+x.dur.quantile(.9)
+
+xx = df.groupby('sim_blk')[['dur']].sum().rename(columns=dict(dur='dur_sim'))
+
+xx[xx.dur_sim > 25]
+
+df[df.blockHeight == 88295].sort_values('dur', ascending=False)
+
+df[df.sim_blk == 32607].sort_values('dur', ascending=False)
+
+_run1[_run1.compute == 381240].dur.describe()
+
+_run1[_run1.compute == 381240].plot.scatter(x='blockHeight', y='dur')
+
+# This wasn't a big deal during most of the chain (.25sec 75th percentile).
+#
+# We could model this within 2x or 3x by ignoring the spike.
+
+# **TODO**: what happened during that spike? is it consensus-observable? kernel-observable?
+
+df = _run1[_run1.compute == 381240]
+df[(df.blockHeight >= 88100) & (df.blockHeight < 88400)].plot.scatter(x='blockHeight', y='dur')
+
+df[df.sim_blk == 32607].compute.sum()
+
+df[df.sim_blk == 32607].dur.sum()
+
+df[df.sim_blk == 32607].syscalls.sum()
+
+df.groupby('blockHeight')[['syscalls']].sum().describe()
 
 # #### Total compute per block
 
@@ -793,11 +931,9 @@ x = pd.concat([
     df.groupby('blockHeight')[['compute']].sum(),
     df.groupby('sim_blk')[['compute']].sum().rename(columns=dict(compute='cmp_sim')),
 ], axis=1)
-x.hist();
+x.hist(log=True);
 
-df[['rate']].plot.barh(subplots=True, log=True, figsize=(12, 12))
-
-pd.read_sql_table('run1', db4)
+x.describe()
 
 cluster.scale(8)
 
@@ -1135,6 +1271,13 @@ pd.merge(_dr16,
          left_on=['vatID', 'deliveryNum'], right_on=['vatID', 'deliveryNum']
         )[['vatID', 'deliveryNum', 'blockHeight', 'kd', 'compute']]
 # _dr16.assign(chain_id=16).set_index(['chain_id', 'vatID', 'deliveryNum'])
+
+
+dall = pd.concat(
+    pd.read_csv(f)
+    for f in _dir('slogfiles/').glob('**/*-deliveries-*.csv.gz')
+)
+dall
 
 
 # +
