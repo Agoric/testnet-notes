@@ -4,8 +4,10 @@ from zlib import crc32
 import gzip
 
 from sqlalchemy.engine.url import URL
-from sqlalchemy import Table, Column, Integer, BIGINT, Numeric, String, MetaData
+from sqlalchemy import (MetaData, Table, Column, select,
+                        Integer, BIGINT, Numeric, String)
 from sqlalchemy.dialects.mysql import JSON
+from sqlalchemy.sql import func
 
 log = logging.getLogger(__name__)
 
@@ -33,19 +35,27 @@ def schema():
 
 
 def shred(src, conn, entry,
-          chunk_size=100):
+          delete=False,
+          chunk_size=10000):
     _size, file_id = file_size_id(src)
     chunk = []
 
-    done = conn.execute(entry.delete().where(entry.c.file_id == file_id))
-    log.info('%s: deleted %d records', entry.name, done.rowcount)
+    if delete:
+        done = conn.execute(entry.delete().where(entry.c.file_id == file_id))
+        log.info('%s: deleted %d records', entry.name, done.rowcount)
+
+    line_max = conn.execute(select(func.max(entry.c.line)).where(
+        entry.c.file_id == file_id)).scalar() or 0
+    log.info('%s: %d existing records', entry.name, line_max)
 
     def add(chunk):
-        log.info('%s += %d records', entry.name, len(chunk))
+        log.info('%s += %d = %d records', entry.name, len(chunk), line_max)
         conn.execute(entry.insert(), chunk)
 
     with gzip.open(src.open('rb')) as lines:
         for ix, line in enumerate(lines):
+            if ix + 1 <= line_max:
+                continue
             try:
                 record = json.loads(line)
             except Exception as ex:
@@ -56,10 +66,11 @@ def shred(src, conn, entry,
                 add(chunk)
                 chunk = []
             chunk.append(dict(file_id=file_id,
-                              line=ix,
+                              line=ix + 1,
                               time=time,
                               type=ty,
                               record=record))
+            line_max = ix + 1
     if chunk:
         add(chunk)
 
