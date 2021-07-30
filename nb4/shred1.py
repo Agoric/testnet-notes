@@ -15,15 +15,19 @@ log = logging.getLogger(__name__)
 
 
 def main(argv, cwd, create_engine):
-    [fn] = argv[1:2]
     db = create_engine(dburl())
     meta = schema()
     if '--drop' in argv:
         log.warning('dropping %s all in %s', meta.tables.keys(), db.name)
         meta.drop_all(bind=db)
     meta.create_all(db)
-    with db.connect() as conn:
-        shred(cwd / fn, conn, meta)
+    for fn in argv[1:]:
+        if not fn.endswith('.slog.gz'):
+            if not fn.startswith('--'):
+                log.warn('skipping arg: %s', fn)
+            continue
+        with db.connect() as conn:
+            shred(cwd / fn, conn, meta)
 
 
 def schema():
@@ -42,6 +46,8 @@ def schema():
           Column('line_lo', Integer, primary_key=True),
           Column('line_hi', Integer),
           Column('line_count', Integer),
+          Column('time_lo', DOUBLE),
+          Column('time_hi', DOUBLE),
           Column('blockHeight_lo', Integer),
           Column('blockHeight_hi', Integer),
           Column('blockTime_lo', Integer),
@@ -49,6 +55,7 @@ def schema():
     Table('slog_block', metadata,
           Column('file_id', BIGINT, primary_key=True),
           Column('line', Integer, primary_key=True),
+          Column('time', DOUBLE),
           Column('run_line_lo', Integer),
           Column('blockHeight', Integer),
           Column('blockTime', Integer),
@@ -58,6 +65,7 @@ def schema():
           Column('run_line_lo', Integer),
           Column('blockTime', Integer),
           Column('blockHeight', Integer),
+          Column('crankNum', Integer),
           Column('line', Integer),
           Column('time', DOUBLE),
           Column('type', String(64)),
@@ -94,58 +102,63 @@ def shred(src, conn, meta,
     run_line_lo = None
     blockHeight = None
     blockTime = None
+    crankNum = None
+    time = None
 
     def add(chunk):
-        log.info('%s += %d = %d from %s',
-                 entry.name, len(chunk), line_loaded, src.name)
-        conn.execute(entry.insert(), chunk)
         loaded = line_loaded + len(chunk)
+        log.info('%s += %d = %d from %s',
+                 entry.name, len(chunk), loaded, src.name)
+        conn.execute(entry.insert(), chunk)
         conn.execute(file_info.update().where(
             file_info.c.file_id == file_id).values(line_loaded=line_loaded))
         return loaded
 
-    def add_run(line):
-        log.info('%s += %s, %d', slog_run.name, src.name, line)
+    def add_run(linum, t):
+        log.info('%s += %s, %d', slog_run.name, src.name, linum)
         conn.execute(slog_run.insert(), [dict(
             file_id=file_id,
             parent=src.parent.name,
             name=src.name,
-            line_lo=line,
+            line_lo=linum,
+            time_lo=t,
         )])
-        return line
+        return linum
 
-    def end_run(line):
-        log.info('%s: %s %d - %d', slog_run.name, src.name, run_line_lo, line)
+    def end_run(linum, t):
+        log.info('%s: %s %d - %d', slog_run.name, src.name, run_line_lo, linum)
         conn.execute(slog_run.update().where(
             and_(slog_run.c.file_id == file_id,
                  slog_run.c.line_lo == run_line_lo)).values(
-                     line_hi=line,
-                     line_count=line - run_line_lo + 1,
+                     line_hi=linum,
+                     line_count=linum - run_line_lo + 1,
+                     time_hi=t,
                      blockHeight_hi=blockHeight,
                      blockTime_hi=blockTime,
                  ))
 
-    def add_block_mark(line, ht, t, sign):
+    def add_block_mark(linum, t, ht, bt, sign):
         if blockHeight is None:
             conn.execute(slog_run.update().where(
                 and_(slog_run.c.file_id == file_id,
                      slog_run.c.line_lo == run_line_lo)).values(
                          blockHeight_lo=ht,
-                         blockTime_lo=t))
+                         blockTime_lo=bt))
         if ht % 100 == 0:
             log.info('%s += %s: %d, %s', slog_block.name, src.name,
-                     ht, datetime.datetime.fromtimestamp(t))
+                     ht, datetime.datetime.fromtimestamp(bt))
         conn.execute(slog_block.insert(), [dict(
             file_id=file_id,
-            line=line,
+            line=linum,
+            time=t,
             run_line_lo=run_line_lo,
             blockHeight=ht,
-            blockTime=t,
+            blockTime=bt,
             sign=sign,
         )])
-        return ht, t
+        return ht, bt
 
-    with gzip.open(src.open('rb')) as lines:
+    with gzip.open(src.open('rb'), 'rt') as lines:
         for ix, line in enumerate(lines):
             if ix + 1 <= line_loaded:
                 continue
@@ -160,15 +173,18 @@ def shred(src, conn, meta,
             ty = record['type']
             if ty == 'import-kernel-start':
                 if run_line_lo is not None:
-                    end_run(ix - 1)
-                run_line_lo = add_run(ix + 1)
+                    end_run(ix - 1, time)
+                run_line_lo = add_run(ix + 1, time)
                 blockHeight = None
                 blockTime = None
             elif ty in ['cosmic-swingset-end-block-start',
                         'cosmic-swingset-end-block-finish']:
                 sign = -1 if ty == 'cosmic-swingset-end-block-start' else 1
                 blockHeight, blockTime = add_block_mark(
-                    ix + 1, record['blockHeight'], record['blockTime'], sign)
+                    ix + 1, time,
+                    record['blockHeight'], record['blockTime'], sign)
+            elif ty == 'deliver':
+                crankNum = record['crankNum']
             chunk.append(dict(file_id=file_id,
                               line=ix + 1,
                               time=time,
@@ -176,10 +192,13 @@ def shred(src, conn, meta,
                               run_line_lo=run_line_lo,
                               blockHeight=blockHeight,
                               blockTime=blockTime,
+                              crankNum=crankNum,
                               record=record))
+            if ty == 'deliver-result':
+                crankNum = None
     if chunk:
         line_loaded = add(chunk)
-    end_run(line_loaded)
+    end_run(line_loaded, time)
     conn.execute(file_info.update().where(
         file_info.c.file_id == file_id).values(line_count=line_loaded))
 
