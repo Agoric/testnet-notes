@@ -9,6 +9,7 @@
       pkgs.jupyter
       pkgs.python38Packages.pip
       pkgs.python38Packages.virtualenv
+      pkgs.python38Packages.pymysql
       pkgs.python38Packages.statsmodels
       pkgs.python38Packages.jupytext
       pkgs.python38Packages.pandas pkgs.python38Packages.matplotlib
