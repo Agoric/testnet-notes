@@ -18,8 +18,21 @@
 import pandas as pd
 dict(pandas=pd.__version__)
 
-
 # ## MySql Access
+
+TOP = __name__ == '__main__'
+
+# +
+import logging
+from sys import stderr
+
+logging.basicConfig(level=logging.INFO, stream=stderr,
+                    format='%(asctime)s %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+log = logging.getLogger(__name__)
+if TOP:
+    log.info('notebook start')
+
 
 # +
 def _slog4db():
@@ -293,27 +306,11 @@ block_end_rate(df, _file_info)[['rate']].sort_values('rate').plot.barh(
 
 # -
 
+block_end_rate(df, _file_info)[['rate']].sort_values('rate')
+
+# Lag
+
 name_files(df, _file_info).groupby('name')[['lag']].sum().plot.barh();
-
-df = pd.read_sql("""
-select r.*, agg.lag
-from (
-    select file_id, run_line_lo, avg(delta) lag
-    from (
-        select b.*, b.time - b.blockTime delta
-        from slog_block b
-        where b.blockTime <= %(t_max)s
-        and b.time >= b.blockTime
-        and b.time - b.blockTime < 60
-        and b.sign = 1
-    ) t
-    group by file_id, run_line_lo
-) agg
-join slog_run r on agg.file_id = r.file_id and agg.run_line_lo = r.line_lo
-""", _db4, params=dict(t_max=agorictest_16_sched_end.timestamp()))
-df.set_index(['parent', 'line_lo'])
-
-df[df.blockHeight_lo == 64628][['parent', 'line_lo', 'lag']]
 
 # ### Any `slog_entry` records yet?
 #
@@ -323,12 +320,19 @@ show_times(pd.read_sql('select * from slog_entry limit 10', _db4)).drop(columns=
 
 # ### Breakdown of entries by type (slow!)
 
+# optimize query by type
+_db4.execute('create index slog_entry_ty_ix on slog_entry (type)')
+
 df = pd.read_sql('''
-select type, count(*), min(line), min(time), max(line), max(time)
+select type, count(*) -- , min(line), min(time), max(line), max(time)
 from slog_entry
+where type is not null
 group by type
 ''', _db4)
-show_times(df, ['min(time)', 'max(time)'])
+# show_times(df, ['min(time)', 'max(time)'])
+df
+
+df.sort_values('count(*)', ascending=False)
 
 # #### Deliver Results
 
@@ -355,9 +359,10 @@ describe slog_entry
 df = pd.read_sql("""
 select json_extract(record, '$.dr[2].compute') compute
      , json_extract(record, '$.kd') kd
+     , json_extract(record, '$.dr') dr
      , json_keys(record) rk
 from slog_entry
-where type = 'deliver'
+where type in ('deliver', 'deliver-result')
 limit 100
 """, _db4)
 show_times(df)
@@ -366,31 +371,158 @@ show_times(df)
 
 agorictest_16_sched_end.timestamp()
 
-_db4.execute(f"""
-create table delrun as
-select file_id, run_line_lo
-     -- , line
-     -- , blockHeight
-     , blockTime
-     -- , time
-     , crankNum
-     , cast(substr(json_unquote(json_extract(record, '$.vatID')), 2) as int) vatID
-     , json_extract(record, '$.deliveryNum') deliveryNum
-       -- json INTEGER comes out as a python/pandas str, so cast to int
-       -- then, to avoid floating point, coalese null to -1
-     , coalesce(cast(json_extract(record, '$.dr[2].compute') as int), 0) compute
-     , json_unquote(json_extract(record, '$.kd[2].method')) method
-     , crc32(json_extract(record, '$.kd')) kd32
-     , case when type = 'deliver' then -1 else 1 end sign
+# avoid
+# OperationalError: (pymysql.err.OperationalError) (1206, 'The total number of locks exceeds the lock table size')
+_db4.execute('SET GLOBAL innodb_buffer_pool_size=268435456;')
+
+_db4.execute('drop table t_delivery')
+
+
+# +
+def build_delivery(db,
+                   table='t_delivery',
+                   blockTime_hi=agorictest_16_sched_end):
+    log.info('building %s', table)
+    db.execute(f"""
+    create table {table} as
+    select file_id, run_line_lo
+         , line
+         , blockHeight
+         , blockTime
+         , time
+         , crankNum
+         , cast(substr(json_unquote(json_extract(record, '$.vatID')), 2) as int) vatID
+         , coalesce(cast(json_extract(record, '$.deliveryNum') as int), -1) deliveryNum
+         , json_unquote(json_extract(record, '$.kd[2].method')) method
+         , crc32(json_extract(record, '$.kd')) kd32
+    from slog_entry
+    where type = 'deliver'
+    and blockTime <= {blockTime_hi.timestamp()}
+    """)
+    log.info('indexing %s', table)
+    db.execute(f"""
+    create index {table}_ix on {table} (file_id, run_line_lo, vatID, deliveryNum)
+    """)
+    return pd.read_sql(f'select * from {table} limit 10', db)
+
+
+def build_delivery_result(db,
+                          table='t_delivery_result',
+                          blockTime_hi=agorictest_16_sched_end):
+    log.info('building %s', table)
+    db.execute(f"""
+    create table {table} as
+    select file_id, run_line_lo
+         , line
+         , blockHeight
+         , blockTime
+         , time
+         , crankNum
+         , cast(substr(json_unquote(json_extract(record, '$.vatID')), 2) as int) vatID
+         , coalesce(cast(json_extract(record, '$.deliveryNum') as int), -1) deliveryNum
+           -- json INTEGER comes out as a python/pandas str, so cast to int
+           -- then, to avoid floating point, coalese null to -1
+         , coalesce(cast(json_extract(record, '$.dr[2].compute') as int), 0) compute
+        from slog_entry
+        where type = 'deliver-result'
+        and blockTime <= {blockTime_hi.timestamp()}
+    """)
+    log.info('indexing %s', table)
+    db.execute(f"""
+    create index {table}_ix on {table} (file_id, run_line_lo, vatID, deliveryNum)
+    """)
+    return pd.read_sql(f'select * from {table} limit 10', db)
+
+
+# -
+
+build_delivery(_db4)
+
+pd.read_sql("""
+describe t_delivery
+""", _db4)
+
+show_times(pd.read_sql("""
+select file_id, run_line_lo, count(*)
+from t_delivery
+group by file_id, run_line_lo
+order by 3 desc
+""", _db4))
+
+log.info('start')
+build_delivery_result(_db4)
+log.info('done')
+
+
+# +
+def join_delivery(db,
+                  table='j_delivery',
+                  t_lo='t_delivery', t_hi='t_delivery_result',):
+    log.info('building %s', table)
+    db.execute(f"""
+    create table {table} as
+    select lo.file_id, lo.run_line_lo
+         , lo.vatID
+         , lo.deliveryNum
+         , lo.crankNum
+         , lo.line
+         , lo.blockHeight
+         , lo.blockTime
+         , lo.time time_lo
+         , hi.time time_hi
+         , hi.time - lo.time dur
+         , lo.method
+         , lo.kd32
+         , hi.compute
+    from {t_lo} lo
+    join {t_hi} hi
+      on hi.file_id = lo.file_id
+     and hi.run_line_lo = lo.run_line_lo
+     and hi.vatID = lo.vatID
+     and hi.deliveryNum = lo.deliveryNum
+    """)
+    log.info('indexing %s', table)
+    db.execute(f"""
+    create index {table}_ix on {table} (vatID, deliveryNum)
+    """)
+    return pd.read_sql(f'select * from {table} limit 10', db)
+
+log.info('start')
+df = join_delivery(_db4)
+log.info('done')
+df
+# -
+
+pd.read_sql('''
+select distinct *
+from (
+select json_unquote(json_extract(record, '$.vatID')) vatID
+     , json_unquote(json_extract(record, '$.name')) name
+     , json_unquote(json_extract(record, '$.description')) description
 from slog_entry
-where type in ('deliver', 'deliver-result')
-and blockTime <= {agorictest_16_sched_end.timestamp()}
-limit 10
-""")
+where type = 'create-vat'
+) t
+''', _db4)
 
+df = pd.read_sql('''
+select vatID, deliveryNum, count(distinct compute)
+from j_delivery
+where vatID != 14 -- vattp has a known problem
+group by vatID, deliveryNum
+having count(distinct compute) > 1
+''', _db4)
+df
 
-df = pd.read_sql('delrun', _db4)
-show_times(df)
+df = pd.read_sql('''
+select vatID, deliveryNum, count(distinct kd32)
+from j_delivery
+where vatID != 14 -- vattp has a known problem
+group by vatID, deliveryNum
+having count(distinct kd32) > 1
+''', _db4)
+df
+
+df.set_index(['vatID', 'deliveryNum']).sort_index()
 
 # syscalls per crank
 
