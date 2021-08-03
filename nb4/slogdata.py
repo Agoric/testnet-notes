@@ -7,6 +7,7 @@ import logging
 
 import numpy as np
 import pandas as pd
+from sqlalchemy.engine.url import URL
 
 log = logging.getLogger(__name__)
 
@@ -300,6 +301,23 @@ class SlogAccess:
                 f'cols: {df.columns} dtypes: {df.dtypes} '
                 f'block {blockHeight, int(block_start.line)}, run\n{run}')
         return df
+
+
+def mysql_socket(database, create_engine,
+                 unix_socket='/var/run/mysqld/mysqld.sock',
+                 charset='utf8mb4',
+                 drivername='mysql+pymysql'):
+    return URL.create(
+        drivername=drivername,
+        host=None,
+        username=None,
+        password=None,
+        database=database,
+        query={
+            'unix_socket': unix_socket,
+            'charset': charset,
+        }
+    )
 
 
 if __name__ == '__main__':

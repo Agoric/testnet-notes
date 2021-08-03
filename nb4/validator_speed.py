@@ -20,32 +20,18 @@ import numpy as np
 dict(pandas=pd.__version__,
      numpy=np.__version__)
 
-
 # ## MySQL
 
 # +
-def _slog4db():
-    import pymysql
+from slogdata import mysql_socket, show_times
+
+def _slog4db(database='slog4'):
     from sqlalchemy import create_engine
-    from sqlalchemy.engine.url import URL
-    url = URL.create(
-        drivername='mysql+pymysql',
-        host=None,
-        username=None,
-        password=None,
-        database='slog4',
-        query={
-            'unix_socket': '/var/run/mysqld/mysqld.sock',
-            'charset': 'utf8mb4',
-        }
-    )
-    return create_engine(url)
+    return create_engine(mysql_socket(database, create_engine))
 
 _db4 = _slog4db()
 _db4.execute('show tables').fetchall()
 # -
-
-from slogdata import show_times
 
 # ## Validator Speeds
 
