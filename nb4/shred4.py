@@ -143,174 +143,104 @@ def cut_after(df, t):
 block_dur_plot(cut_after(_blkdur, agorictest_16_sched_end), title='Block durations thru scheduled phase 4 end');
 # -
 
-# ## Validator Speeds
+# ## Notes Tue Aug 3
+#
+#  - long deliveries are anomalies "that' weird"
+#  - blocks that take a long time made of normal-sized deliveries: policy can help
 
-pd.read_sql("""
-select * from slog_block
-limit 3
-""", _db4)
+88000 - 88500
+78000
 
-pd.read_sql("""
-select f.parent, count(distinct blockHeight), count(*)
-from slog_block b
-join file_info f on b.file_id = f.file_id
-group by b.file_id
-order by 3
-""", _db4).set_index('parent')
+block_dur_plot(_blkdur[(_blkdur.index >= 78800) & (_blkdur.index <= 78900)].reset_index(), x='blockHeight');
 
-# Are we mixing chains? Any block times before `2021-07-01 19:00:00`?
+# So about 20 blocks that were slow (>10 sec)
 
-df = pd.read_sql("""
-select min(blockTime), max(blockTime) from slog_block
-""", _db4)
-show_times(df, ['min(blockTime)', 'max(blockTime)'])
+#  & (_blkdur.dur > 10)
+show_times(_blkdur[(_blkdur.index >= 78840) & (_blkdur.index <= 78852)].reset_index())
 
-pd.read_sql("""
-select agg.*, blockHeight_hi - blockHeight_lo + 1 spread
-from (
-select count(*) records
-     , count(distinct blockHeight) blocks
-     , min(blockHeight) blockHeight_lo
-     , max(blockHeight) blockHeight_hi
-from slog_block
-) agg
-""", _db4)
+# 78842 longest
+#
+# 5 normal before
+#
+# no deliveries in 78842; where are they?
 
 df = pd.read_sql("""
-select blockHeight, count(distinct file_id) file_id_qty
-from slog_block
+select blockHeight, count(*)
+from j_delivery
+where blockHeight between 78842 - 2 and 78842 + 2
 group by blockHeight
-""", _db4, index_col='blockHeight')
-df.head()
-
-df.plot(title='Validator coverage by blockHeight');
-
-_db4.execute("""
-create index slog_block_ix
-on slog_block (file_id, run_line_lo, blockHeight)
-""")
-
-
-# +
-def block_mark_match(db):
-    return pd.read_sql("""
-    select lo.file_id, lo.run_line_lo, lo.blockHeight, lo.blockTime
-         , lo.time time_lo
-         , hi.time time_hi
-         , lo.line line_lo
-         , hi.line line_hi
-    from slog_block lo
-    join slog_block hi
-      on hi.file_id = lo.file_id
-     and hi.run_line_lo = lo.run_line_lo
-     and hi.blockHeight = lo.blockHeight
-    where lo.sign = -1
-    and hi.sign = 1
-    """, db)
-
-_bmm = block_mark_match(_db4)
-_bmm
-# -
-
-# ### Block processing time: duration, lag
-#
-#  - **dur** = time from `cosmic-swingset-end-block-start` to `cosmic-swingset-end-block-finish`
-#  - **lag** = time from `blockTime` to `cosmic-swingset-end-block-start`
-#
-# But not all block end start/finish log entries follow immediately after voting:
-#   - for the genesis block, block end start happens when the node is started up, which may be well before genesis time
-#   - when a validator restarts, **does it emit block end start/finish event while it's replaying???**
-
-df = _bmm[(_bmm.blockHeight > 64628) & (_bmm.blockHeight <= 75000)]
-df = df.assign(dur=df.time_hi - df.time_lo,
-               lag=df.time_lo - df.blockTime,
-               line_count=df.line_hi - df.line_lo + 1)
-df = df[(df.line_count > 2) & (df.lag >= 0) & (df.lag < 45)]
-df[['dur', 'lag']].describe()
-
+""", _db4)
 df
 
-df.plot.scatter(x='blockHeight', y='dur', alpha=0.2);
+# block time vs swingset dur
 
-df.plot.scatter(x='blockHeight', y='lag', alpha=0.2);
+df = pd.read_sql("""
+select *
+from slog_block
+where blockHeight = 78840
+""", _db4)
 
-df[['dur']].hist(log=True);
+df = pd.read_sql("""
+select *
+from j_delivery
+where blockHeight = 78840
+and file_id = 47274718195312
+""", _db4).drop(columns=['file_id', 'run_line_lo', 'line', 'time_lo'])
+df
 
-_file_info = pd.read_sql_table('file_info', _db4, index_col='file_id')
+# color by method? vat name
+df.plot.scatter(x='crankNum', y='compute', figsize=(12, 5))
 
+# draw graph across multiple validators
+show_times(df, ['time_hi']).plot.scatter(x='crankNum', y='time_hi', figsize=(12, 5))
 
-# +
-def name_files(df, file_info, drop=True):
-    name = file_info['name'].loc[df.file_id]
-    parent = file_info['parent'].loc[df.file_id]
-    return pd.concat([
-        df.set_index('file_id'),
-        pd.DataFrame(dict(name=name, parent=parent)),
-    ], axis=1).reset_index(drop=drop)
+show_times(df[df.crankNum >= 292496], ['time_hi'])
 
+# vat names would be cool; color?
+df.plot.scatter(x='crankNum', y='vatID', figsize=(12, 5))
 
-name_files(df, _file_info).groupby(['parent', 'run_line_lo'])[['dur', 'lag']].aggregate(['mean', 'median'])
+df.groupby('vatID')[['crankNum']].count().plot.pie(y='crankNum')
 
+# Zoe dominates time, but vattp, comms take 1/4th
 
-# +
-def order_of(items):
-    lex = sorted(items)
-    return [list(items).index(item) for item in lex]
+df.groupby('vatID')[['dur']].sum().plot.pie(y='dur')
 
-med = name_files(df[['file_id', 'dur']], _file_info).groupby('parent')[['dur']].median().sort_values('dur')
+#
+#  - What user activity was happening?
+#    - (7 ext messages coming in, right? deliveryInbound, ack)
 
+# causal:
+# vat 1: result promise from send...
+# vat 2: deliver result promise kpid
+#
+# vat 2: resolve same kpid
+# vat 1: notify
 
-ax = name_files(df[['file_id', 'dur']], _file_info).boxplot(
-    positions=order_of(med.index),
-    by=['parent'], rot=-75, figsize=(10, 5), whis=(5, 95));
-ax.set_ylim(0, 6);
-# ax[0][0].get_figure().suptitle('')
-# ax.set_title('Block end start-to-finish');
+df['cc'] = df.compute.cumsum()
 
-# +
+# 25m cumulative computrons; **8m** ea for 10sec
 
-med = name_files(df[['file_id', 'lag']], _file_info).groupby('parent')[['lag']].median().sort_values('lag')
+show_times(df, ['time_hi']).plot.scatter(x='time_hi', y='cc', figsize=(12, 5))
 
-order_of(med.index.values)
-#med.sort_values('lag') # .index.values # .reset_index() # .set_index('parent', drop=False)
-# -
+df[df.vatID == 14]
 
-med.lag.sort_values()
+df.groupby('method')[['line']].count().sort_values('line')
 
-[med.index[i] for i in order_of(med.index)]
+# BW is inclined to switch to shell and jq; what file to look in?
 
-# +
-med = name_files(df[['file_id', 'lag']], _file_info).groupby('parent')[['lag']].median().sort_values('lag')
+_file_info.loc[47274718195312]
 
-ax = name_files(df[['file_id', 'lag']], _file_info).boxplot(
-    positions=order_of(med.index),
-    by=['parent'], rot=-75, figsize=(10, 5), whis=(5, 95));
-ax.set_ylim(4, 28)
+# What lines?
 
+pd.read_sql('''
+select *
+from slog_block
+where blockHeight = 78840
+and file_id = 47274718195312
+''', _db4)
 
-# +
-def block_end_rate(df, file_info):
-    g = name_files(df, file_info).groupby('parent')
-    dur = g[['dur']].sum()
-    n = g[['blockHeight']].nunique()
-    rate= pd.concat([dur, n], axis=1).assign(rate=dur.dur / n.blockHeight)
-    return rate
-
-block_end_rate(df, _file_info)[['rate']].sort_values('rate').plot.barh(
-    title='End-block processing (sec/block)',
-    figsize=(8, 6),
-);
-#x = name_files(df, _file_info).groupby('name')[['dur']].sum()
-#x
-# .plot.barh();
-
-# -
-
-block_end_rate(df, _file_info)[['rate']].sort_values('rate')
-
-# Lag
-
-name_files(df, _file_info).groupby('name')[['lag']].sum().plot.barh();
+# big pipelines AMM thing... 9x...
+# getCurrentAmount, getUpdateSince
 
 # ### Any `slog_entry` records yet?
 #
