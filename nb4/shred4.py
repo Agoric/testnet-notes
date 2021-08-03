@@ -16,7 +16,9 @@
 # ## Preface: PyData
 
 import pandas as pd
-dict(pandas=pd.__version__)
+import numpy as np
+dict(pandas=pd.__version__,
+     numpy=np.__version__)
 
 # ## MySql Access
 
@@ -58,22 +60,34 @@ _db4.execute('show tables').fetchall()
 
 # ## File Info
 
-pd.read_sql('select * from file_info order by line_count', _db4)
+# Stop before loading the next file:
 
-pd.read_sql('select sum(line_count) / 1000000 from file_info order by st_size', _db4)
+_db4.execute('''
+alter table file_info_stop rename to file_info
+''')
+
+pd.read_sql('select * from file_info_stop order by line_count', _db4)
+
+pd.read_sql('select sum(line_count) / 1000000 from file_info_stop order by st_size', _db4)
 
 # ## Runs
 
 from slogdata import show_times
 
+gen16 = show_times(pd.DataFrame(dict(blockHeight=64628, blockTime=[1625166000], ts=1625166000)), ['blockTime'])
+gen16
+
 _run = pd.read_sql("""
-select * from slog_run
+select case when blockTime_lo < 1625166000 then 15 else 16 end chain
+     , r.*
+from slog_run r
 where blockHeight_lo is not null
 order by file_id, line_lo
 """, _db4)
-show_times(_run, ['blockTime_lo', 'blockTime_hi', 'time_lo', 'time_hi'])
+show_times(_run, ['blockTime_lo', 'blockTime_hi', 'time_lo', 'time_hi']
+          ).set_index(['chain', 'parent', 'name', 'file_id', 'line_lo']).sort_index()
 
-_run[['line_count']].hist();
+_run.pivot(columns='chain', values='line_count').hist();
 
 # ## blockTime ranges of runs
 
@@ -90,7 +104,7 @@ import datetime
 datetime.datetime.fromtimestamp(1625158475.7698095)
 
 
-# ## Blocks, consensus block times / durations
+# ## Blocks, consensus block times / durations (agorictest-16)
 
 # +
 def blockmark(db, parent):
@@ -102,6 +116,7 @@ def blockmark(db, parent):
         )
         select b.* from slog_block b
         cross join f1 on f1.file_id = b.file_id
+        where b.blockTime >= 1625166000
         order by line
     """, db, params=dict(parent=parent))
     df = df.set_index(['file_id', 'run_line_lo', 'blockHeight'])
@@ -248,7 +263,9 @@ and file_id = 47274718195312
 
 show_times(pd.read_sql('select * from slog_entry limit 10', _db4)).drop(columns=['record'])
 
-# ### Breakdown of entries by type (slow!)
+# ### Breakdown of entries by type
+
+_db4.execute('drop index slog_entry_ty_ix on slog_entry')
 
 # optimize query by type
 _db4.execute('create index slog_entry_ty_ix on slog_entry (type)')
@@ -260,9 +277,11 @@ where type is not null
 group by type
 ''', _db4)
 # show_times(df, ['min(time)', 'max(time)'])
-df
+df.sort_values('count(*)', ascending=False)
 
 df.sort_values('count(*)', ascending=False)
+
+55224062 / 2876760
 
 # #### Deliver Results
 
@@ -303,9 +322,7 @@ agorictest_16_sched_end.timestamp()
 
 # avoid
 # OperationalError: (pymysql.err.OperationalError) (1206, 'The total number of locks exceeds the lock table size')
-_db4.execute('SET GLOBAL innodb_buffer_pool_size=268435456;')
-
-_db4.execute('drop table t_delivery')
+_db4.execute('SET GLOBAL innodb_buffer_pool_size=268435456;');
 
 
 # +
@@ -366,7 +383,11 @@ def build_delivery_result(db,
 
 # -
 
-build_delivery(_db4)
+log.info('drop...')
+_db4.execute('drop table t_delivery')
+df = build_delivery(_db4)
+log.info('done')
+df
 
 pd.read_sql("""
 describe t_delivery
@@ -379,9 +400,13 @@ group by file_id, run_line_lo
 order by 3 desc
 """, _db4))
 
-log.info('start')
-build_delivery_result(_db4)
+# +
+log.info('drop...')
+_db4.execute('drop table t_delivery_result')
+
+df = build_delivery_result(_db4)
 log.info('done')
+df
 
 
 # +
@@ -423,16 +448,21 @@ log.info('done')
 df
 # -
 
+# ## Vat names: what is the vatID for vattp?
+
 pd.read_sql('''
-select distinct *
+select distinct vatID, name
 from (
-select json_unquote(json_extract(record, '$.vatID')) vatID
+select
+       cast(substr(json_unquote(json_extract(record, '$.vatID')), 2) as int) vatID
      , json_unquote(json_extract(record, '$.name')) name
-     , json_unquote(json_extract(record, '$.description')) description
+     -- , json_unquote(json_extract(record, '$.description')) description
 from slog_entry
 where type = 'create-vat'
 ) t
-''', _db4)
+where name is not null
+order by vatID
+''', _db4, index_col='vatID')
 
 df = pd.read_sql('''
 select vatID, deliveryNum, count(distinct compute)
@@ -465,3 +495,11 @@ group by file_id, run_line_lo, blockHeight, blockTime, crankNum
 show_times(df)
 
 show_times(df.set_index(['file_id', 'run_line_lo', 'crankNum']))
+
+df = pd.read_sql('''
+select count(distinct vatID, deliveryNum)
+from j_delivery
+-- where vatID != 14 -- vattp has a known problem
+-- group by vatID, deliveryNum
+''', _db4)
+df
