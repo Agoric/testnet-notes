@@ -182,10 +182,43 @@ show_times(_blkdur[(_blkdur.index >= 78840) & (_blkdur.index <= 78852)].reset_in
 df = pd.read_sql("""
 select blockHeight, count(*)
 from j_delivery
-where blockHeight between 78842 - 2 and 78842 + 2
+where blockHeight between 78842 - 2 and 78842 + 10
 group by blockHeight
 """, _db4)
 df
+
+# BW is inclined to switch to shell and jq; what file to look in?
+
+_file_info.loc[47274718195312]
+
+# ## Select block for visualization
+
+df = pd.read_sql('''
+select b.blockHeight, bd.deliveries, b.sign, f.parent, f.name, b.line
+from (
+    select blockHeight, count(*) deliveries
+    from j_delivery
+    where blockHeight between 78842 - 2 and 78842 + 10
+    group by blockHeight
+) bd
+join slog_block b
+on b.blockHeight = bd.blockHeight
+join file_info f on f.file_id = b.file_id
+where b.file_id = 47274718195312
+''', _db4)
+df = df.assign(R=df.line.diff() + 1)
+df[df.sign == 1].sort_values('deliveries')
+
+# +
+x = df[(df.deliveries == 1536) & (df.sign == 1)].iloc[0]
+x['out'] = f'bk{x.blockHeight}.gv'
+cmd = f'/home/customer/projects/gztool/gztool -v 0 -L {x.line} -R {x.R} slogfiles/{x.parent}/{x["name"]}'
+# !$cmd | python causal_slog.py >$x.out
+
+x
+# -
+
+# !ls *.gv
 
 # block time vs swingset dur
 
@@ -235,24 +268,12 @@ df['cc'] = df.compute.cumsum()
 
 # 25m cumulative computrons; **8m** ea for 10sec
 
-show_times(df, ['time_hi']).plot.scatter(x='time_hi', y='cc', figsize=(12, 5))
+show_times(df, ['time_hi']).plot.scatter(x='time_hi', y='cc', figsize=(12, 5),
+                                        title='Cumulative Computrons over Time')
 
 df[df.vatID == 14]
 
 df.groupby('method')[['line']].count().sort_values('line')
-
-# BW is inclined to switch to shell and jq; what file to look in?
-
-_file_info.loc[47274718195312]
-
-# What lines?
-
-pd.read_sql('''
-select *
-from slog_block
-where blockHeight = 78840
-and file_id = 47274718195312
-''', _db4)
 
 # big pipelines AMM thing... 9x...
 # getCurrentAmount, getUpdateSince
