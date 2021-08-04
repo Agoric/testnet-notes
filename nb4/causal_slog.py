@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 
 def main(stdin, stdout):
     log.info('to get block 78840: %s', ' '.join(bk1()))
-    arcs = cranks(stdin)
+    arcs = AgViz().slog_arcs(stdin)
     GraphViz.format_graph(arcs, stdout, style=AgViz)
 
 
@@ -29,114 +29,150 @@ def bk1(L=12160222, R=15432,
     return cmd
 
 
-def cranks(lines,
-           # comms 'v13', , vattp 'v14' are kinda boring
-           exclude_vats=[]):
-    delivery = None
-    deliveryNode = None
-    vatDelivery = {}
-    prevSyscall = None
+class AgViz:
+    colors = {
+        '1': '#ccffcc',   # bank
+        '5': '#aaffaa',   # mints
+        '10': '#ffcccc',  # zoe
+        '11': '#bbffbb',  # bootstrap
+        '13': '#f8fff8',  # comms
+        '14': '#ffeeee',  # vattp
+        '16': 'orange',   # treasury
+        '18': '#ffffcc',  # contract vat
+    }
 
-    for line in lines:
-        entry = json.loads(line)
-        ty = entry['type']
-        # if ty not in ['deliver', 'deliver-result',
-        #               'syscall', 'syscall-result', 'clist']:
-        #    log.info('entry %s %s', ty, entry.get('vatID'))
-        if ty == 'deliver':
-            prevSyscall = None
-            kd = entry['kd']
-            vatID = entry['vatID']
-            if vatID in exclude_vats:
-                continue
-            deliveryNum = entry['deliveryNum']
-            delivery = entry
-            if kd[0] == 'message':
-                [_, target, msg] = kd
-                method = msg['method']
-                slots = msg['args']['slots']
-                result = msg['result']
-                node = f'D:{target}@{vatID}#{deliveryNum}\n.{method}'
-                deliveryNode = node
-                prev = vatDelivery.get(vatID)
-                if prev:
-                    yield (prev, node, {'style': 'dotted'})  # next
-                vatDelivery[vatID] = node
-                # yield (target, node, {'label': 'targetOf'})
-                if result:
-                    yield (result, node, {})  # 'label': 'resultOf'
-                # for slot in slots:
-                #    yield (slot, node, {'label': 'slotOfD'})
-            elif kd[0] == 'notify':
-                primarykp = kd[1][0][0]
-                node = f'DN:{primarykp}@{vatID}#{deliveryNum}({len(kd[1])})'
-                deliveryNode = node
-                # prev = vatDelivery.get(vatID)
-                # if prev:
-                #     yield (prev, node, {'style': 'dotted'})  # next
-                vatDelivery[vatID] = node
-                for [kp, info] in kd[1]:
-                    yield (f'R:{kp}', node, {})  # 'label': 'notifies'
-                    if info['state'] == 'fulfilled':
-                        slots = info['data']['slots']
-                        for slot in slots:
-                            pass
-                    else:
-                        raise NotImplementedError(info)
-            elif kd[0] in ['dropExports']:
+    @classmethod
+    def node_style(cls, n):
+        color = 'white'
+        if n.startswith('D'):
+            vid = re.search(r'v(\d+)', n).group(1)
+            color = cls.colors.get(vid, 'white')
+        if re.search(r'^DN:', n):
+            return dict(fillcolor=color, style='filled')
+        elif re.search(r'^D:', n):
+            return dict(shape='box', fillcolor=color, style='filled')
+        return None
+
+    def __init__(self):
+        self.vatID = None
+        self.deliveryNum = None
+        self.deliveryNode = None
+        self.vatDelivery = {}
+        self.prevSyscall = None
+
+    def slog_arcs(self, lines,
+                  # comms 'v13', , vattp 'v14' are kinda boring
+                  exclude_vats=[]):
+        delivery = None
+
+        for line in lines:
+            entry = json.loads(line)
+            ty = entry['type']
+            if ty == 'deliver':
+                self.prevSyscall = None
+                self.vatID = entry['vatID']
+                if self.vatID in exclude_vats:
+                    continue
+                delivery = entry
+                self.deliveryNum = entry['deliveryNum']
+                for arc in self.delivery_arcs(entry):
+                    yield arc
+            elif ty == 'deliver-result':
+                delivery = None
+            elif ty == 'syscall':
+                if not delivery:
+                    continue
+                for arc in self.syscall_arcs(entry):
+                    yield arc
+            elif ty == 'syscall-result':
                 pass
-            else:
-                raise NotImplementedError(kd)
-            # log.info('delivery %s', json.dumps(entry, indent=2))
-            #     body = json.loads(kd[2]['args']['body'])
-            #     log.info('body: %s', json.dumps(body, indent=2))
-        elif ty == 'deliver-result':
-            delivery = None
-        elif ty == 'syscall':
-            if not delivery:
-                continue
-            # log.info('syscall %s', entry['ksc'][0])
-            # log.info('syscall %s', entry['vsc'][0])
-            # log.info('syscall %s', entry)
-            ksc = entry['ksc']
-            syscallNum = entry['syscallNum']
-            if ksc[0] == 'resolve':
-                node = f'S:{vatID}:{deliveryNum}:{syscallNum}\n#{ksc[0]}'
-                if syscallNum > 0 and prevSyscall:
-                    yield (prevSyscall, node,
-                           {'style': 'dotted', 'color': 'blue'})
-                prevSyscall = node
-                yield (deliveryNode, node, {})  # 'label': 'syscall'
-                for kp, _b, data in ksc[2]:
-                    yield (node, f'R:{kp}', {})  # 'label': 'resolve'
-                    for slot in data['slots']:
+
+    def delivery_arcs(self, entry):
+        vatID, deliveryNum = self.vatID, self.deliveryNum
+        kd = entry['kd']
+        if kd[0] == 'message':
+            [_, target, msg] = kd
+            method = msg['method']
+            result = msg['result']
+            node = f'D:{target}@{vatID}#{deliveryNum}\n.{method}'
+            self.deliveryNode = node
+            prev = self.vatDelivery.get(vatID)
+            if prev:
+                yield (prev, node, {'style': 'dotted'})  # next
+            self.vatDelivery[vatID] = node
+            # yield (target, node, {'label': 'targetOf'})
+            if result:
+                yield (result, node, {})  # 'label': 'resultOf'
+            # slots = msg['args']['slots']
+            # for slot in slots:
+            #    yield (slot, node, {'label': 'slotOfD'})
+        elif kd[0] == 'notify':
+            primarykp = kd[1][0][0]
+            node = f'DN:{primarykp}@{vatID}#{deliveryNum}({len(kd[1])})'
+            self.deliveryNode = node
+            # prev = vatDelivery.get(vatID)
+            # if prev:
+            #     yield (prev, node, {'style': 'dotted'})  # next
+            self.vatDelivery[vatID] = node
+            for [kp, info] in kd[1]:
+                yield (f'R:{kp}', node, {})  # 'label': 'notifies'
+                if info['state'] == 'fulfilled':
+                    slots = info['data']['slots']
+                    for slot in slots:
                         pass
-                        # yield (node, slot, {'label': 'slotOfR'})
-            elif ksc[0] == 'send':
-                node = (f'S:{vatID}:{deliveryNum}:{syscallNum}\n' +
-                        f'#{ksc[0]}\n.{ksc[2]["method"]}')
-                if syscallNum > 0 and prevSyscall:
-                    yield (prevSyscall, node,
-                           {'style': 'dotted', 'color': 'blue'})
-                prevSyscall = node
-                yield (deliveryNode, node, {})  # 'label': 'syscall'
-                target = ksc[1]
-                method = ksc[2]['method']
-                slots = ksc[2]['args']['slots']
-                result = ksc[2]['result']
-                if result:
-                    yield (node, result, {})  # 'label': 'result'
+                else:
+                    raise NotImplementedError(info)
+        elif kd[0] in ['dropExports']:
+            pass
+        else:
+            raise NotImplementedError(kd)
+        # log.info('delivery %s', json.dumps(entry, indent=2))
+        #     body = json.loads(kd[2]['args']['body'])
+        #     log.info('body: %s', json.dumps(body, indent=2))
+
+    def syscall_arcs(self, entry):
+        vatID, deliveryNum = self.vatID, self.deliveryNum
+        # log.info('syscall %s', entry['ksc'][0])
+        # log.info('syscall %s', entry['vsc'][0])
+        # log.info('syscall %s', entry)
+        ksc = entry['ksc']
+        syscallNum = entry['syscallNum']
+
+        style = {'style': 'dotted', 'color': 'blue'}
+
+        if ksc[0] == 'resolve':
+            node = f'S:{vatID}:{deliveryNum}:{syscallNum}\n#{ksc[0]}'
+            if syscallNum > 0 and self.prevSyscall:
+                yield (self.prevSyscall, node, style)
+            self.prevSyscall = node
+            yield (self.deliveryNode, node, {})  # 'label': 'syscall'
+            for kp, _b, _data in ksc[2]:
+                yield (node, f'R:{kp}', {})  # 'label': 'resolve'
                 # for slot in data['slots']:
                 #    pass
-                # yield (slot, node, {'label': 'slotOfSend'})
-            elif ksc[0] in ['subscribe', 'invoke',
-                            'dropImports', 'retireImports', 'retireExports',
-                            'vatstoreGet', 'vatstoreSet', 'vatstoreDelete']:
-                pass
-            else:
-                raise NotImplementedError(ksc)
-        elif ty == 'syscall-result':
+                #    yield (node, slot, {'label': 'slotOfR'})
+        elif ksc[0] == 'send':
+            node = (f'S:{vatID}:{deliveryNum}:{syscallNum}\n' +
+                    f'#{ksc[0]}\n.{ksc[2]["method"]}')
+            if syscallNum > 0 and self.prevSyscall:
+                yield (self.prevSyscall, node, style)
+            self.prevSyscall = node
+            yield (self.deliveryNode, node, {})  # 'label': 'syscall'
+            result = ksc[2]['result']
+            if result:
+                yield (node, result, {})  # 'label': 'result'
+            # target = ksc[1]
+            # method = ksc[2]['method']
+            # slots = ksc[2]['args']['slots']
+            # for slot in data['slots']:
+            #    pass
+            # yield (slot, node, {'label': 'slotOfSend'})
+        elif ksc[0] in ['subscribe', 'invoke',
+                        'dropImports', 'retireImports', 'retireExports',
+                        'vatstoreGet', 'vatstoreSet', 'vatstoreDelete']:
             pass
+        else:
+            raise NotImplementedError(ksc)
 
 
 class GraphViz:
@@ -166,31 +202,6 @@ class GraphViz:
                 if attrs:
                     out.write(f'{lit(n)} {attrfmt(attrs)}\n')
         out.write('}\n')
-
-
-class AgViz:
-    colors = {
-        '1': '#ccffcc',   # bank
-        '5': '#aaffaa',   # mints
-        '10': '#ffcccc',  # zoe
-        '11': '#bbffbb',  # bootstrap
-        '13': '#f8fff8',  # comms
-        '14': '#ffeeee',  # vattp
-        '16': 'orange',   # treasury
-        '18': '#ffffcc',  # contract vat
-    }
-
-    @classmethod
-    def node_style(cls, n):
-        color = 'white'
-        if n.startswith('D'):
-            vid = re.search(r'v(\d+)', n).group(1)
-            color = cls.colors.get(vid, 'white')
-        if re.search(r'^DN:', n):
-            return dict(fillcolor=color, style='filled')
-        elif re.search(r'^D:', n):
-            return dict(shape='box', fillcolor=color, style='filled')
-        return None
 
 
 if __name__ == '__main__':
