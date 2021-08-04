@@ -94,7 +94,7 @@ class AgViz:
             [_, target, msg] = kd
             method = msg['method']
             result = msg['result']
-            node = f'D:{target}@{vatID}#{deliveryNum}\n.{method}'
+            node = f'D:{target}.{method}\n@{vatID}#{deliveryNum}'
             self.deliveryNode = node
             prev = self.vatDelivery.get(vatID)
             if prev:
@@ -108,7 +108,7 @@ class AgViz:
             #    yield (slot, node, {'label': 'slotOfD'})
         elif kd[0] == 'notify':
             primarykp = kd[1][0][0]
-            node = f'DN:{primarykp}@{vatID}#{deliveryNum}({len(kd[1])})'
+            node = f'DN:{primarykp}({len(kd[1])})\n@{vatID}#{deliveryNum}'
             self.deliveryNode = node
             # prev = vatDelivery.get(vatID)
             # if prev:
