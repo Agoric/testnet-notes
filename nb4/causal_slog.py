@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 def main(stdin, stdout):
     log.info('to get block 78840: %s', ' '.join(bk1()))
     arcs = cranks(stdin)
-    tographviz(arcs, stdout)
+    GraphViz.format_graph(arcs, stdout, style=AgViz)
 
 
 def bk1(L=12160222, R=15432,
@@ -139,48 +139,58 @@ def cranks(lines,
             pass
 
 
-colors = {
-    '1': '#ccffcc',   # bank
-    '5': '#aaffaa',   # mints
-    '10': '#ffcccc',  # zoe
-    '11': '#bbffbb',  # bootstrap
-    '13': '#f8fff8',  # comms
-    '14': '#ffeeee',  # vattp
-    '16': 'orange',   # treasury
-    '18': '#ffffcc',  # contract vat
-}
+class GraphViz:
+    @classmethod
+    def format_graph(cls, arcs, out,
+                     style=None):
+        lit = json.dumps
+
+        def attrfmt(attrs):
+            parts = [f'{name}={lit(value)}'
+                     for name, value in attrs.items()]
+            return f'[{" ".join(parts)}]'
+
+        nodes = set()
+        out.write('digraph G {\n')
+        for (src, dest, attrs) in arcs:
+            out.write(f'{lit(src)} -> {lit(dest)}')
+            if attrs:
+                out.write(' ')
+                out.write(attrfmt(attrs))
+            out.write('\n')
+            nodes |= set([src, dest])
+
+        if style:
+            for n in nodes:
+                attrs = style.node_style(n)
+                if attrs:
+                    out.write(f'{lit(n)} {attrfmt(attrs)}\n')
+        out.write('}\n')
 
 
-def tographviz(arcs, out):
-    lit = json.dumps
+class AgViz:
+    colors = {
+        '1': '#ccffcc',   # bank
+        '5': '#aaffaa',   # mints
+        '10': '#ffcccc',  # zoe
+        '11': '#bbffbb',  # bootstrap
+        '13': '#f8fff8',  # comms
+        '14': '#ffeeee',  # vattp
+        '16': 'orange',   # treasury
+        '18': '#ffffcc',  # contract vat
+    }
 
-    def attrfmt(attrs):
-        parts = [f'{name}={lit(value)}'
-                 for name, value in attrs.items()]
-        return f'[{" ".join(parts)}]'
-
-    nodes = set()
-    out.write('digraph G {\n')
-    for (src, dest, attrs) in arcs:
-        out.write(f'{lit(src)} -> {lit(dest)}')
-        if attrs:
-            out.write(' ')
-            out.write(attrfmt(attrs))
-        out.write('\n')
-        nodes |= set([src, dest])
-
-    for n in nodes:
+    @classmethod
+    def node_style(cls, n):
         color = 'white'
         if n.startswith('D'):
             vid = re.search(r'v(\d+)', n).group(1)
-            color = colors.get(vid, 'white')
+            color = cls.colors.get(vid, 'white')
         if re.search(r'^DN:', n):
-            style = dict(fillcolor=color, style='filled')
-            out.write(f'{lit(n)} [fillcolor="{color}" style="filled"]\n')
+            return dict(fillcolor=color, style='filled')
         elif re.search(r'^D:', n):
-            style = dict(shape='box', fillcolor=color, style='filled')
-            out.write(f'{lit(n)} {attrfmt(style)}')
-    out.write('}\n')
+            return dict(shape='box', fillcolor=color, style='filled')
+        return None
 
 
 if __name__ == '__main__':
