@@ -1,10 +1,60 @@
-# causal:
-# vat 1: result promise from send...
-# vat 2: deliver result promise kpid
-#
-# vat 2: resolve same kpid
-# vat 1: notify
+"""causal_slog - Swingset Log (slogfile) causal visualization
 
+Swingset logs (slogfiles) record events in the Agoric smart contract
+platform, which provides asynchronous messaging between JavaScript
+event loops. For example, this deliver event (formatted for readability):
+
+{
+  "time": 1625269779.8321261,
+  "type": "deliver",
+  "crankNum": 293340,
+  "vatID": "v1",
+  "deliveryNum": 36694,
+  "kd": [
+    "message",
+    "ko571",
+    {
+      "method": "getCurrentAmount",
+      "args": {
+        "body": "[]",
+        "slots": []
+      },
+      "result": "kp116645"
+    }
+  ],
+  "vd": [ ... ]
+}
+
+comes from running code such as
+
+  const p = E(o).getCurrentAmount()
+
+which calls the `getCurrentAmount` method on an object `o` that the
+swingset kernel tracks as `ko571`, where the result should be sent to
+promise `p`, tracked in the kernel as `kp116645`.
+
+ - "vatID": "v1" tells which vat, i.e. which JavaScript
+   event loop, the object `o` lives in.
+ - "deliveryNum": 36694 indicates the that this is 36694th
+   delivery to this vat
+ - "crankNum": 293340 indicates that this is the 293340th
+   delivery that the swingset kernel has made across all vats.
+
+We visualize this as a box labelled:
+
+  D:ko571.getCurrentAmount
+  @v1#36694
+
+with an arc coming in from a node labelled `kp116645`.
+
+In response to this message, a vat may make "syscalls" to queue
+messages (shown `S:v13:69955:53 #send .transmit`) or resolve promises
+(shown `S:v1:36694:0 #resolve`).
+
+See also
+https://github.com/Agoric/agoric-sdk/blob/master/packages/SwingSet/docs/delivery.md # noqa
+
+"""
 
 import json
 import logging
