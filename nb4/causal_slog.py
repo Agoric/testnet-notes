@@ -175,6 +175,22 @@ class AgViz:
             raise NotImplementedError(ksc)
 
 
+"""TODO:
+
+subgraph cluster_key {
+ label="Legend";
+ v1 -> v10 -> v11 -> v13 -> v14 -> v16 -> v18 [style="invisible"]
+ v1 [shape="box" style="filled" color="#ccffcc" label="v1: bank"]
+ v10 [shape="box" style="filled" color="#ffcccc" label="v10: zoe"]
+ v11 [shape="box" style="filled" color="#bbffbb" label="v11: bootstrap"]
+ v13 [shape="box" style="filled" color="#f8fff8" label="v13: comms"]
+ v14 [shape="box" style="filled" color="#ffeeee" label="v14: vattp"]
+ v16 [shape="box" style="filled" color="orange" label="v16: treasury"]
+ v18 [shape="box" style="filled" color="#ffffcc" label="v18: loadgen"]
+}
+"""
+
+
 class GraphViz:
     @classmethod
     def format_graph(cls, arcs, out,
