@@ -172,7 +172,7 @@ class AgViz:
                         pass
                 else:
                     raise NotImplementedError(info)
-        elif kd[0] in ['dropExports']:
+        elif kd[0] in ['dropExports', 'retireImports', 'retireExports']:
             pass
         else:
             raise NotImplementedError(kd)
