@@ -103,18 +103,15 @@ def simulate_run_policy(df, threshold=8e6):
     # does 10e6 help with bank update latency?
     # only a little: max ~50 rather than ~70
     meter = 0
-    block_in = None
-    block_out = None
+    # t_in = t_out = df.blockTime[0]
+    block_in = block_out = df.blockHeight.values[0]
     for crankNum, d in df.iterrows():
-        if block_in is None:
-            block_in = block_out = d.blockHeight
-            t_in = t_out = d.blockTime
-        yield block_out  # do the work
         if d.blockHeight > block_in:
             block_in = d.blockHeight
             if block_in > block_out:
                 block_out = block_in
                 meter = 0
+        yield block_out  # do the work
         meter += d.compute
         if meter > threshold:
             meter = 0
@@ -123,6 +120,9 @@ def simulate_run_policy(df, threshold=8e6):
 df = _dc16[_dc16.blockHeight > _dc16.blockHeight.min()]
 _sim16 = df.assign(bkSim=list(simulate_run_policy(df)))
 _sim16
+# -
+
+_sim16[_sim16.bkSim < _sim16.blockHeight]
 
 
 # +
@@ -156,6 +156,31 @@ df[['vatID', 'deliveryNum',
     'dur', 'durationInBlock', 'durationInSimBlk']].describe()
 
 df[['durationInBlock', 'durationInSimBlk']].plot(figsize=(12, 6));
+
+# ## Computrons go 3.7x faster early in agorictest-16
+
+sim_lo = df[(df.index >= 20000) & (df.index <= 70000)]
+sim_lo = sim_lo.reset_index().set_index(['blockHeight', 'crankNum'])
+sim_lo = sim_lo.assign(rate=sim_lo.compute / sim_lo.dur)
+sim_lo[['durationInBlock', 'durationInSimBlk']].plot(figsize=(12, 4));
+
+sim_lo[['compute', 'computeInBlock', 'computeInSimBlk',
+        'dur','durationInBlock', 'durationInSimBlk', 'rate']].describe()
+
+sim_hi = df[df.index >= 250000]
+sim_hi = sim_hi.reset_index().set_index(['blockHeight', 'crankNum'])
+sim_hi = sim_hi.assign(rate=sim_hi.compute / sim_hi.dur)
+sim_hi[['durationInBlock', 'durationInSimBlk']].plot(figsize=(12, 4));
+
+sim_hi[['compute', 'computeInBlock', 'computeInSimBlk',
+        'dur','durationInBlock', 'durationInSimBlk', 'rate']].describe()
+
+# +
+rate_lo_median = 1.738564e+06
+rate_hi_median = 4.711452e+05
+
+round(rate_lo_median / rate_hi_median, 1)
+# -
 
 # ## Latency
 
@@ -294,13 +319,15 @@ def bank_trace(db,
 # x1 = bank_trace(_db4, bk_hi=68817 + 100)
 # x2 = bank_trace(_db4, bk_lo=69707 - 100)
 # x = pd.concat([x1, x2])
-x = bank_trace(_db4, limit=100)
+x = bank_trace(_db4, limit=1000)
 show_times(x)
 # -
 
 x.updated.describe()
 
-show_times(x[~x.updated.isnull()]).plot.scatter(x='time', y='updated',
+x1 = x[~x.updated.isnull()]
+color = np.where(x1.vatID == 1, 'blue', 'red')
+show_times(x1).plot.scatter(x='time', y='updated', color=color,
                                                 figsize=(10, 4), alpha=0.45,
                                                 title='Accounts Updated per delivery');
 
