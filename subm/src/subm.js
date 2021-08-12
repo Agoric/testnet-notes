@@ -1,7 +1,6 @@
 /* global require, Buffer */
 // @ts-check
 
-const { assert } = require('console');
 const discord = require('passport-discord');
 
 const { freeze } = Object;
@@ -89,7 +88,7 @@ const the = it => {
 async function main(env, { get, express, passport }) {
   const host = env.HOST || 'localhost';
   const port = parseInt(env.PORT || '3000', 10);
-  const base = `http://localhost:${port}`;
+  const base = `http://${host}:${port}`;
 
   const app = express();
   app.use(passport.initialize());
