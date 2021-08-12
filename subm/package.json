@@ -1,5 +1,44 @@
 {
+  "private": true,
+  "name": "subm",
+  "version": "1.0.0",
+  "description": "Submit Agoric Testnet slogfiles based on Discord Auth",
+  "main": "index.js",
+  "scripts": {
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint:eslint": "eslint '**/*.js'",
+    "lint:types": "tsc -p jsconfig.json",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Dan Connolly <connolly@agoric.com>",
+  "license": "MIT",
   "devDependencies": {
-    "@cloudflare/wrangler": "^1.19.0"
+    "@agoric/eslint-config": "^0.3.14",
+    "@endo/eslint-config": "^0.3.12",
+    "@typescript-eslint/parser": "^4.29.1",
+    "eslint": "^7.32.0",
+    "eslint-config-airbnb-base": "^14.2.1",
+    "eslint-config-prettier": "^8.3.0",
+    "eslint-plugin-import": "^2.24.0",
+    "eslint-plugin-jsdoc": "^36.0.7",
+    "eslint-plugin-prettier": "^3.4.0",
+    "prettier": "^1.18.2",
+    "typescript": "^4.3.5"
+  },
+  "dependencies": {
+    "gcs-signed-urls": "^1.0.4",
+    "passport-discord": "^0.1.4"
+  },
+  "eslintConfig": {
+    "extends": [
+      "@endo"
+    ],
+    "ignorePatterns": [
+      "examples/**/*.js"
+    ]
+  },
+  "prettier": {
+    "trailingComma": "all",
+    "singleQuote": true
   }
 }
