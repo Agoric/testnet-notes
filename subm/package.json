@@ -1,0 +1,5 @@
+{
+  "devDependencies": {
+    "@cloudflare/wrangler": "^1.19.0"
+  }
+}
