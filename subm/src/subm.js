@@ -185,9 +185,8 @@ function makeUploader(guild, storage) {
 
     /**
      * @param {TemplateTag} config
-     * @param {string} base
      */
-    strategy: (config, base) =>
+    strategy: config =>
       new discord.Strategy(
         {
           clientID: config`DISCORD_CLIENT_ID`,
@@ -281,6 +280,7 @@ const makeConfig = env => {
  */
 async function main(env, { clock, get, express, passport, gcs }) {
   const app = express();
+  app.enable('trust proxy'); // trust X-Forwarded-* headers
   app.get('/', (_req, res) => res.send(Site.start));
 
   const { base, port } = Site.base(
@@ -309,7 +309,7 @@ async function main(env, { clock, get, express, passport, gcs }) {
 
   passport.serializeUser(site.serializeUser);
   passport.deserializeUser(site.deserializeUser);
-  passport.use(site.strategy(config, base));
+  passport.use(site.strategy(config));
   app.use(passport.initialize());
   app.use(passport.session());
   app.get(Site.authPath, passport.authenticate('discord'));
