@@ -1,12 +1,40 @@
+#!/usr/bin/env node
+/**
+ * subm - submit Agoric Testnet Swingset logs (slogfiles)
+ *
+ * Access to upload files is granted based on Discord OAuth credentials.
+ * Data is stored in Google Cloud Storage.
+ */
+
 /* global require, Buffer */
 // @ts-check
 
-const discord = require('passport-discord');
+const discord = require('passport-discord'); // please excuse CJS
 const session = require('express-session');
 
-const { freeze } = Object;
+const { freeze } = Object; // please excuse freeze vs. harden
+
+// ocap: Import powerful references only when invoked from CLI.
+/* global module */
+if (require.main === module) {
+  /* eslint-disable global-require */
+  /* global process */
+  // eslint-disable-next-line no-use-before-define
+  main(
+    { ...process.env },
+    {
+      clock: () => Date.now(),
+      express: require('express'),
+      passport: require('passport'),
+      gcs: require('gcs-signed-urls'),
+      get: require('https').get,
+    },
+  ).catch(err => console.error(err));
+}
 
 /**
+ * Ensure a value is not falsy.
+ *
  * @param { T | null | undefined } it
  * @returns { T }
  * @template T
@@ -17,8 +45,68 @@ const the = it => {
 };
 
 /**
+ * @param {string} host
+ * @param {string} path
+ * @param {Record<string, string>} headers
+ * @param {{ get: typeof import('https').get }} io
+ * @returns { Promise<string> }
+ */
+function getContent(host, path, headers, { get }) {
+  // console.log('calling Discord API', { host, path, headers });
+  return new Promise((resolve, reject) => {
+    const req = get({ host, path, headers }, res => {
+      /** @type { Buffer[] } */
+      const chunks = [];
+      // console.log({ status: res.statusCode,
+      //               headers: res.headers });
+      res
+        .on('data', data => {
+          chunks.push(data);
+        })
+        .on('end', () => {
+          const body = Buffer.concat(chunks).toString();
+          resolve(body);
+        });
+    });
+    req.on('error', err => {
+      console.error('Discord API error:', err);
+      reject(err);
+    });
+  });
+}
+
+/**
+ * Discord API (a small slice of it, anyway)
+ *
  * @param {string} token
  * @param {{ get: typeof import('https').get }} io
+ *
+ * // https://discordapp.com/developers/docs/resources/user
+ * @typedef {{
+ *  id: Snowflake,
+ *  username: string,
+ *  discriminator: string, // 4 digit discord-tag
+ *  avatar: ?string,
+ *  bot?: boolean,
+ *  mfa_enabled?: boolean,
+ *  locale?: string,
+ *  verified?: boolean,
+ *  email?: string
+ * }} DiscordUser
+ *
+ * https://discord.com/developers/docs/resources/guild#guild-member-object
+ * @typedef {{
+ *   user?: DiscordUser,
+ *   nick?: string,
+ *   roles: Snowflake[],
+ *   joined_at: TimeStamp,
+ *   deaf: boolean,
+ *   mute: boolean,
+ *   pending?: boolean,
+ *   permissions?: string,
+ * }} GuildMember
+ * @typedef { string } Snowflake 64 bit numeral
+ * @typedef { string } TimeStamp ISO8601 format
  */
 function DiscordAPI(token, { get }) {
   // cribbed from rchain-dbr/o2r/gateway/server/main.js
@@ -26,32 +114,12 @@ function DiscordAPI(token, { get }) {
   const api = '/api/v6';
   const headers = { Authorization: `Bot ${token}` };
 
-  /** @param { string } path */
-  function getJSON(path) {
-    console.log('calling Discord API', { host, path, headers });
-    return new Promise((resolve, reject) => {
-      const req = get({ host, path, headers }, res => {
-        /** @type { Buffer[] } */
-        const chunks = [];
-        // console.log({ status: res.statusCode,
-        //               headers: res.headers });
-        res
-          .on('data', data => {
-            chunks.push(data);
-          })
-          .on('end', () => {
-            const body = Buffer.concat(chunks).toString();
-            const data = JSON.parse(body);
-            console.log('@@Discord done:', Object.keys(data));
-            resolve(data);
-          });
-      });
-      req.on('error', err => {
-        console.error('Discord API error:', err);
-        reject(err);
-      });
-    });
-  }
+  const getJSON = async path => {
+    const body = await getContent(host, path, headers, { get });
+    const data = JSON.parse(body);
+    // console.log('Discord done:', Object.keys(data));
+    return data;
+  };
 
   return freeze({
     /** @param { string } guildID */
@@ -63,7 +131,7 @@ function DiscordAPI(token, { get }) {
         },
         /**
          * @param { string } userID
-         * @returns { Promise<unknown> }
+         * @returns { Promise<GuildMember> }
          */
         members(userID) {
           return getJSON(`${api}/guilds/${guildID}/members/${userID}`);
@@ -79,10 +147,11 @@ const Pages = freeze({
 <title>Agoric Testnet Submission</title>
 
 <a href="/auth/discord">login to discord and upload</a>
-
-<hr />
 `,
+
   /**
+   * Construct upload form.
+   *
    * WARNING: caller is responsible to see that values are html-injection-safe
    *
    * @param {{
@@ -96,7 +165,8 @@ const Pages = freeze({
   upload: ({ GoogleAccessId, key, bucket, policy, signature, ...headers }) => `
 <!doctype html>
 <title>Agoric Testnet Submission</title>
-<form action="http://${bucket}.storage.googleapis.com" method="post" enctype="multipart/form-data">
+<form action="http://${bucket}.storage.googleapis.com"
+      method="post" enctype="multipart/form-data">
 	<input type="text" name="key" value="${key}">
 	<input type="hidden" name="bucket" value="${bucket}">
 	<input type="hidden" name="GoogleAccessId" value="${GoogleAccessId}">
@@ -108,12 +178,6 @@ const Pages = freeze({
 	<input name="file" type="file">
 	<input type="submit" value="Upload">
 </form>
-
-
-<hr />
-
-<a href="https://${bucket}.storage.googleapis.com/${key}" target="_new">View https://${bucket}.storage.googleapis.com/${key}</a>
-
   `,
 });
 
@@ -125,29 +189,43 @@ function makeUploader(guild, storage) {
   const self = freeze({
     uploadPath: '/uploadForm',
     callbackPath: '/auth/discord/callback',
+    /** @param { string } base */
     callbackURL: base => new URL(self.callbackPath, base).toString(),
-    serializeUser: (user, done) => done(null, user),
-    deserializeUser: (obj, done) => done(null, obj),
-    /** @param { unknown } profile */
-    async login(profile) {
-      if (typeof profile !== 'object' || !profile) throw TypeError();
-      // @ts-ignore ????
-      const { id } = profile;
-      if (typeof id !== 'string') throw TypeError();
-      const member = await guild.members(id);
-      console.log('@@@member', member);
-      if (typeof member !== 'object' || !member) throw TypeError();
-      // @ts-ignore
-      const { user } = member;
-      if (typeof user !== 'object' || !user) throw TypeError();
-      const { username, discriminator } = user;
-      if (typeof username !== 'string' || typeof discriminator !== 'string')
-        throw TypeError();
-      return `${username}#${discriminator}`;
+    /**
+     * @param {Express.User} user
+     * @param {(e: Error | null, s: string) => string} done
+     */
+    serializeUser: (user, done) => {
+      const {
+        id,
+        avatar,
+        username,
+        discriminator,
+      } = /** @type { DiscordUser } */ (user);
+      done(null, JSON.stringify({ id, avatar, username, discriminator }));
     },
     /**
+     * @param { string } obj
+     * @param {(e: any, u: Express.User | false | null | undefined ) => void} done
+     */
+    deserializeUser: (obj, done) => {
+      const { id, avatar, username, discriminator } = JSON.parse(obj);
+      done(null, { id, avatar, username, discriminator });
+    },
+
+    /** @param { DiscordUser } profile */
+    async login(profile) {
+      const { id } = profile;
+      const member = await guild.members(id);
+      // console.log('member', member);
+      const { user } = member;
+      if (!user) throw TypeError();
+      return user;
+    },
+
+    /**
      * @param { string } fileName
-     * @param key
+     * @param { string } key
      */
     formData: (fileName, key) => storage.uploadRequest(fileName, key, true, {}),
   });
@@ -234,21 +312,4 @@ async function main(env, { clock, get, express, passport, gcs }) {
 
   console.log(base);
   app.listen(port);
-}
-
-/* global module */
-if (require.main === module) {
-  // ocap: Import powerful references only when invoked as a main module.
-  /* eslint-disable global-require */
-  /* global process */
-  main(
-    { ...process.env },
-    {
-      clock: () => Date.now(),
-      express: require('express'),
-      passport: require('passport'),
-      gcs: require('gcs-signed-urls'),
-      get: require('https').get,
-    },
-  ).catch(err => console.error(err));
 }
