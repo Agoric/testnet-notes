@@ -11,8 +11,9 @@
 
 const discord = require('passport-discord'); // please excuse CJS
 const session = require('express-session');
+const gcs = require('gcs-signed-urls'); // we use only pure parts
 
-const { freeze } = Object; // please excuse freeze vs. harden
+const { freeze, keys, values } = Object; // please excuse freeze vs. harden
 
 /**
  * @param {string} host
@@ -155,11 +156,34 @@ const Site = freeze({
 `,
   authPath: '/auth/discord',
 
+  testnetRoles: {
+    'testnet-participant': '819067161371738173',
+    'testnet-teammate': '825108158744756226',
+    team: '754111409645682700',
+  },
+
+  /** @param { GuildMember } mem */
+  checkParticipant(mem) {
+    const needed = Site.testnetRoles;
+    const roles = values(needed).filter(r => mem.roles.includes(r));
+    if (roles.length < 1) {
+      return `${mem.nick} lacks roles ${JSON.stringify(keys(needed))}`;
+    }
+    return null;
+  },
+
   checkAuth: (req, res, next) => {
     if (req.isAuthenticated()) return next();
     res.send('not logged in :(');
     return undefined;
   },
+
+  badLoginPath: '/loginRefused',
+
+  badLogin: () => `${Site.top}
+  <p><strong>Login refused.</strong> Only Incentivized Testnet participants are allowed.</p>
+  <form action="/"><button type="submit">Try again</button></form>
+  `,
 
   /**
    * Construct upload form.
@@ -212,23 +236,24 @@ function makeUploader(guild, storage) {
     callbackURL: base => new URL(self.callbackPath, base).toString(),
 
     /**
-     * @param {TemplateTag} config
+     * @param {discord.StrategyOptions} opts
      */
-    strategy: config =>
+    strategy: opts =>
       new discord.Strategy(
-        {
-          clientID: config`DISCORD_CLIENT_ID`,
-          clientSecret: config`DISCORD_CLIENT_SECRET`,
-          callbackURL: self.callbackPath,
-          scope: ['identify', 'email', 'guilds', 'guilds.join'],
-        },
+        opts,
+        // TODO: refreshToken handling
         async (_accessToken, _refreshToken, profile, cb) => {
-          try {
-            const user = await self.login(profile);
-            cb(null, user);
-          } catch (err) {
-            cb(err);
+          const { id } = profile;
+          const member = await guild.members(id);
+
+          const message = Site.checkParticipant(member);
+          if (message) {
+            console.warn(message);
+            return cb(null, false, { message });
           }
+
+          console.info('login', member);
+          return cb(null, member);
         },
       ),
 
@@ -237,31 +262,16 @@ function makeUploader(guild, storage) {
      * @param {(e: Error | null, s: string) => string} done
      */
     serializeUser: (user, done) => {
-      const {
-        id,
-        avatar,
-        username,
-        discriminator,
-      } = /** @type { DiscordUser } */ (user);
-      done(null, JSON.stringify({ id, avatar, username, discriminator }));
+      const member = /** @type { GuildMember } */ (user);
+      done(null, JSON.stringify(member));
     },
     /**
      * @param { string } obj
      * @param {(e: any, u: Express.User | false | null | undefined ) => void} done
      */
     deserializeUser: (obj, done) => {
-      const { id, avatar, username, discriminator } = JSON.parse(obj);
-      done(null, { id, avatar, username, discriminator });
-    },
-
-    /** @param { DiscordUser } profile */
-    async login(profile) {
-      const { id } = profile;
-      const member = await guild.members(id);
-      // console.log('member', member);
-      const { user } = member;
-      if (!user) throw TypeError();
-      return user;
+      const member = JSON.parse(obj);
+      done(null, member);
     },
 
     /**
@@ -303,10 +313,9 @@ const makeConfig = env => {
  *   get: typeof import('https').get,
  *   express: typeof import('express'),
  *   passport: typeof import('passport'),
- *   gcs: typeof import('gcs-signed-urls'),
  * }} io
  */
-async function main(env, { clock, get, express, passport, gcs }) {
+async function main(env, { clock, get, express, passport }) {
   const app = express();
   app.enable('trust proxy'); // trust X-Forwarded-* headers
   app.get('/', (_req, res) => res.send(Site.start()));
@@ -338,15 +347,23 @@ async function main(env, { clock, get, express, passport, gcs }) {
 
   passport.serializeUser(site.serializeUser);
   passport.deserializeUser(site.deserializeUser);
-  passport.use(site.strategy(config));
+  passport.use(
+    site.strategy({
+      clientID: config`DISCORD_CLIENT_ID`,
+      clientSecret: config`DISCORD_CLIENT_SECRET`,
+      callbackURL: site.callbackPath,
+      scope: ['identify', 'email'],
+    }),
+  );
   app.use(passport.initialize());
   app.use(passport.session());
   app.get(Site.authPath, passport.authenticate('discord'));
   app.get(
     site.callbackPath,
-    passport.authenticate('discord', { failureRedirect: '/' }),
+    passport.authenticate('discord', { failureRedirect: Site.badLoginPath }),
     (_req, res) => res.redirect(site.uploadPath), // Successful auth
   );
+  app.get(Site.badLoginPath, (_r, res) => res.send(Site.badLogin()));
 
   app.get(site.uploadPath, Site.checkAuth, (req, res) => {
     const user = /** @type { DiscordUser } */ (req.user);
@@ -371,7 +388,6 @@ if (require.main === module) {
       clock: () => Date.now(),
       express: require('express'),
       passport: require('passport'),
-      gcs: require('gcs-signed-urls'),
       get: require('https').get,
     },
   ).catch(err => console.error(err));
