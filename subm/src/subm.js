@@ -14,24 +14,6 @@ const session = require('express-session');
 
 const { freeze } = Object; // please excuse freeze vs. harden
 
-// ocap: Import powerful references only when invoked from CLI.
-/* global module */
-if (require.main === module) {
-  /* eslint-disable global-require */
-  /* global process */
-  // eslint-disable-next-line no-use-before-define
-  main(
-    { ...process.env },
-    {
-      clock: () => Date.now(),
-      express: require('express'),
-      passport: require('passport'),
-      gcs: require('gcs-signed-urls'),
-      get: require('https').get,
-    },
-  ).catch(err => console.error(err));
-}
-
 /**
  * Ensure a value is not falsy.
  *
@@ -245,16 +227,31 @@ function makeUploader(guild, storage) {
  * }} io
  */
 async function main(env, { clock, get, express, passport, gcs }) {
-  const host = env.HOST || 'localhost';
   const port = parseInt(env.PORT || '3000', 10);
-  const base = `http://${host}:${port}`;
+  const base = env.GOOGLE_CLOUD_PROJECT
+    ? `https://${env.GOOGLE_CLOUD_PROJECT}.wl.r.appspot.com`
+    : `http://${env.HOST || 'localhost'}:${port}`;
+
+  /**
+   * @param { TemplateStringsArray } parts
+   * @param {...any} _args
+   */
+  const config = ([name], ..._args) => {
+    const value = env[name];
+    if (value === undefined) {
+      throw Error(`${name} not configured`);
+    }
+    return value;
+  };
 
   const storage = gcs(
-    env.GCS_PRIVATE_KEY,
-    env.GOOGLE_SERICES_EMAIL,
-    env.GCS_STORAGE_BUCKET,
+    config`GCS_PRIVATE_KEY`,
+    config`GOOGLE_SERVICES_EMAIL`,
+    config`GCS_STORAGE_BUCKET`,
   );
-  const guild = DiscordAPI(the(env.TOKEN), { get }).guilds(the(env.GUILD_ID));
+  const guild = DiscordAPI(config`DISCORD_API_TOKEN`, { get }).guilds(
+    config`DISCORD_GUILD_ID`,
+  );
   const site = makeUploader(guild, storage);
 
   passport.serializeUser(site.serializeUser);
@@ -262,10 +259,11 @@ async function main(env, { clock, get, express, passport, gcs }) {
 
   const strategy = new discord.Strategy(
     {
-      clientID: the(env.CLIENT_ID),
-      clientSecret: the(env.CLIENT_SECRET),
+      clientID: config`DISCORD_CLIENT_ID`,
+      clientSecret: config`DISCORD_CLIENT_SECRET`,
       callbackURL: site.callbackURL(base),
       scope: ['identify', 'email', 'guilds', 'guilds.join'],
+      // proxy: true,
     },
     async (_accessToken, _refreshToken, profile, cb) => {
       try {
@@ -281,7 +279,7 @@ async function main(env, { clock, get, express, passport, gcs }) {
   const app = express();
   app.use(
     session({
-      secret: the(env.SESSION_SECRET),
+      secret: config`SUBM_SESSION_SECRET`,
       resave: false,
       saveUninitialized: false,
     }),
@@ -306,10 +304,28 @@ async function main(env, { clock, get, express, passport, gcs }) {
     const ts = new Date(clock()).toISOString();
     const freshKey = `${ts}-${fileName}`;
     const formData = site.formData(fileName, freshKey);
-    console.log({ formData }); // @@@
+    // console.log({ formData });
     res.send(Pages.upload(formData));
   });
 
   console.log(base);
   app.listen(port);
+}
+
+// ocap: Import powerful references only when invoked from CLI.
+/* global module */
+if (require.main === module) {
+  /* eslint-disable global-require */
+  /* global process */
+  // eslint-disable-next-line no-use-before-define
+  main(
+    { ...process.env },
+    {
+      clock: () => Date.now(),
+      express: require('express'),
+      passport: require('passport'),
+      gcs: require('gcs-signed-urls'),
+      get: require('https').get,
+    },
+  ).catch(err => console.error(err));
 }
