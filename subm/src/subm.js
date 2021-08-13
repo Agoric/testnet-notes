@@ -134,6 +134,7 @@ const Site = freeze({
     label { display: block; padding: .5em }
     .avatar {
       border-radius: 10%; padding: 5x; border 1px solid #ddd;
+    }
   </style>
   </head>
 
