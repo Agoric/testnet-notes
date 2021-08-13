@@ -116,7 +116,6 @@ const Site = freeze({
    * @param {string | undefined} project
    * @param {string | undefined} hostConfig
    * @param {string | undefined} portConfig
-   * @returns
    */
   base: (project, hostConfig, portConfig) => {
     const port = parseInt(portConfig || '3000', 10);
@@ -126,11 +125,30 @@ const Site = freeze({
     return { base, port };
   },
 
-  start: `
-<!doctype html>
-<title>Agoric Testnet Submission</title>
+  top: `
+  <!doctype html>
+  <head>
+  <title>Agoric Testnet Submission</title>
+  <link rel='stylesheet' id='wp-block-library-css'  href='https://agoric.com/wp-includes/css/dist/block-library/style.min.css?ver=5.8' type='text/css' media='all' />
+  <link rel='stylesheet' id='vendor-css-css'  href='https://agoric.com/wp-content/themes/agoric_2021_theme/assets/css/vendor.min.css?ver=1.0.0.0' type='text/css' media='all' />
+  <link rel='stylesheet' id='main-css-css'  href='https://agoric.com/wp-content/themes/agoric_2021_theme/assets/css/style.min.css?ver=1.0.0.0' type='text/css' media='all' />
+  <link rel='stylesheet' id='custom-style-css'  href='https://agoric.com/wp-content/themes/agoric_2021_theme/style.css?ver=5.8' type='text/css' media='all' />
+  </head>
 
-<a href="/auth/discord">login to discord and upload</a>
+  <div class="container">
+  <nav>
+  <a href="https://agoric.com/">
+  <img alt="Agoric" align="bottom"
+     src="https://agoric.com/wp-content/themes/agoric_2021_theme/assets/img/logo.svg" />
+  </a> &middot; <a href="https://validate.agoric.com/">Incentivized Testnet</a>
+  </nav>
+  <hr />
+  `,
+  start: () => `${Site.top}
+<h1>Incentivized Testnet Participants</h1>
+
+<form action="/auth/discord"><button type="submit">Login via Discord</button></form>
+</div>
 `,
   authPath: '/auth/discord',
 
@@ -154,9 +172,12 @@ const Site = freeze({
    * } & Record<string, string> } info
    */
   upload: ({ GoogleAccessId, key, bucket, policy, signature, ...headers }) => `
-<!doctype html>
-<title>Agoric Testnet Submission</title>
-<form action="http://${bucket}.storage.googleapis.com"
+${Site.top}
+
+<h1>Swingset log (slogfile) submission</h1>
+
+
+<form action="https://${bucket}.storage.googleapis.com"
       method="post" enctype="multipart/form-data">
 	<input type="text" name="key" value="${key}">
 	<input type="hidden" name="bucket" value="${bucket}">
@@ -281,7 +302,7 @@ const makeConfig = env => {
 async function main(env, { clock, get, express, passport, gcs }) {
   const app = express();
   app.enable('trust proxy'); // trust X-Forwarded-* headers
-  app.get('/', (_req, res) => res.send(Site.start));
+  app.get('/', (_req, res) => res.send(Site.start()));
 
   const { base, port } = Site.base(
     env.GOOGLE_CLOUD_PROJECT,
@@ -291,6 +312,7 @@ async function main(env, { clock, get, express, passport, gcs }) {
 
   const config = makeConfig(env);
   app.use(
+    // @ts-ignore ???
     session({
       secret: config`SUBM_SESSION_SECRET`,
       resave: false,
