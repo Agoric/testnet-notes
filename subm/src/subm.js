@@ -11,8 +11,9 @@
 
 const discord = require('passport-discord'); // please excuse CJS
 const session = require('express-session');
+const gcs = require('gcs-signed-urls'); // we use only pure parts
 
-const { freeze } = Object; // please excuse freeze vs. harden
+const { freeze, keys, values } = Object; // please excuse freeze vs. harden
 
 /**
  * @param {string} host
@@ -129,6 +130,12 @@ const Site = freeze({
   <!doctype html>
   <head>
   <title>Agoric Testnet Submission</title>
+  <style>
+    label { display: block; padding: .5em }
+    .avatar {
+      border-radius: 10%; padding: 5x; border 1px solid #ddd;
+    }
+  </style>
   </head>
 
   <div class="container">
@@ -155,17 +162,43 @@ const Site = freeze({
 `,
   authPath: '/auth/discord',
 
+  testnetRoles: {
+    'testnet-participant': '819067161371738173',
+    'testnet-teammate': '825108158744756226',
+    team: '754111409645682700',
+  },
+
+  /** @param { GuildMember } mem */
+  checkParticipant(mem) {
+    const needed = Site.testnetRoles;
+    const roles = values(needed).filter(r => mem.roles.includes(r));
+    if (roles.length < 1) {
+      return `${mem.nick} lacks roles ${JSON.stringify(keys(needed))}`;
+    }
+    return null;
+  },
+
   checkAuth: (req, res, next) => {
     if (req.isAuthenticated()) return next();
     res.send('not logged in :(');
     return undefined;
   },
 
+  badLoginPath: '/loginRefused',
+
+  badLogin: () => `${Site.top}
+  <p><strong>Login refused.</strong> Only Incentivized Testnet participants are allowed.</p>
+  <form action="/"><button type="submit">Try again</button></form>
+  `,
+
+  avatars: 'https://cdn.discordapp.com/avatars',
+
   /**
    * Construct upload form.
    *
    * WARNING: caller is responsible to see that values are html-injection-safe
    *
+   * @param { GuildMember } member
    * @param {{
    *  GoogleAccessId: string,
    *  key: string,
@@ -174,27 +207,38 @@ const Site = freeze({
    *  signature: string,
    * } & Record<string, string> } info
    */
-  upload: ({ GoogleAccessId, key, bucket, policy, signature, ...headers }) => `
+  upload: (
+    member,
+    { GoogleAccessId, key, bucket, policy, signature, ...headers },
+  ) => `
 ${Site.top}
 
 <h1>Swingset log (slogfile) submission</h1>
 
+<figure>
+<img class="avatar"
+     src="${Site.avatars}/${member.user?.id}/${member.user?.avatar}.png" />
+<figcaption>Welcome <b>${member.nick || 'participant'}</b>.</figcaption>
+</figure>
 
 <form action="https://${bucket}.storage.googleapis.com"
       method="post" enctype="multipart/form-data">
       <fieldset><legend>slogfile</legend>
-  <div>Suggested name: <code><em>moniker</em>-agorictest-<em>NN</em></code>.slog.gz</code></div>
-	<input type="text" name="key" value="${key}">
 	<input type="hidden" name="bucket" value="${bucket}">
 	<input type="hidden" name="GoogleAccessId" value="${GoogleAccessId}">
 	<input type="hidden" name="policy" value="${policy}">
 	<input type="hidden" name="signature" value="${signature}">
   <input type="hidden" name="Content-Type" value="${headers['Content-Type']}">
-  <input type="hidden" name="Content-Disposition" value="${headers['Content-Disposition']}">
-
-	<input name="file" type="file">
-	<input type="submit" value="Upload">
+  <input type="hidden" name="Content-Disposition" value="${
+    headers['Content-Disposition']
+  }">
+  <label>
+    Suggested name: <code><em>moniker</em>-agorictest-<em>NN</em></code>.slog.gz</code><br />
+	  <input name="file" type="file">
+    <input type="submit" value="Upload">
+  </label>
   <p><em><strong>NOTE:</strong> this page lacks feedback on when your upload finishes.</em></p>
+	<label><em>storage key:</em> <input type="text" readonly name="key" value="${key}" /></label>
   </fieldset>
 </form>
   `,
@@ -212,23 +256,28 @@ function makeUploader(guild, storage) {
     callbackURL: base => new URL(self.callbackPath, base).toString(),
 
     /**
-     * @param {TemplateTag} config
+     * @param {discord.StrategyOptions} opts
      */
-    strategy: config =>
+    strategy: opts =>
       new discord.Strategy(
-        {
-          clientID: config`DISCORD_CLIENT_ID`,
-          clientSecret: config`DISCORD_CLIENT_SECRET`,
-          callbackURL: self.callbackPath,
-          scope: ['identify', 'email', 'guilds', 'guilds.join'],
-        },
+        opts,
+        // TODO: refreshToken handling
         async (_accessToken, _refreshToken, profile, cb) => {
-          try {
-            const user = await self.login(profile);
-            cb(null, user);
-          } catch (err) {
-            cb(err);
+          const { id } = profile;
+          const member = await guild.members(id);
+
+          const message = Site.checkParticipant(member);
+          if (message) {
+            console.warn(message);
+            return cb(null, false, { message });
           }
+          if (!member.user) {
+            const noUser = `undefined user in GuildMember ${id}`;
+            console.warn(noUser);
+            cb(null, false, { message: noUser });
+          }
+          console.info('login', member);
+          return cb(null, member);
         },
       ),
 
@@ -237,38 +286,26 @@ function makeUploader(guild, storage) {
      * @param {(e: Error | null, s: string) => string} done
      */
     serializeUser: (user, done) => {
-      const {
-        id,
-        avatar,
-        username,
-        discriminator,
-      } = /** @type { DiscordUser } */ (user);
-      done(null, JSON.stringify({ id, avatar, username, discriminator }));
+      const member = /** @type { GuildMember } */ (user);
+      done(null, JSON.stringify(member));
     },
     /**
      * @param { string } obj
      * @param {(e: any, u: Express.User | false | null | undefined ) => void} done
      */
     deserializeUser: (obj, done) => {
-      const { id, avatar, username, discriminator } = JSON.parse(obj);
-      done(null, { id, avatar, username, discriminator });
-    },
-
-    /** @param { DiscordUser } profile */
-    async login(profile) {
-      const { id } = profile;
-      const member = await guild.members(id);
-      // console.log('member', member);
-      const { user } = member;
-      if (!user) throw TypeError();
-      return user;
+      const member = JSON.parse(obj);
+      done(null, member);
     },
 
     /**
-     * @param { DiscordUser } user
+     * @param { GuildMember } member
      * @param { number } freshTime
      */
-    formData: (user, freshTime) => {
+    formData: (member, freshTime) => {
+      const { user } = member;
+      if (!user) throw TypeError('corrupted session');
+
       // ISSUE: # in filename is asking for trouble
       const userID = `${user.username}#${user.discriminator}`;
       const fileName = `${userID}.slog.gz`;
@@ -303,10 +340,9 @@ const makeConfig = env => {
  *   get: typeof import('https').get,
  *   express: typeof import('express'),
  *   passport: typeof import('passport'),
- *   gcs: typeof import('gcs-signed-urls'),
  * }} io
  */
-async function main(env, { clock, get, express, passport, gcs }) {
+async function main(env, { clock, get, express, passport }) {
   const app = express();
   app.enable('trust proxy'); // trust X-Forwarded-* headers
   app.get('/', (_req, res) => res.send(Site.start()));
@@ -338,22 +374,33 @@ async function main(env, { clock, get, express, passport, gcs }) {
 
   passport.serializeUser(site.serializeUser);
   passport.deserializeUser(site.deserializeUser);
-  passport.use(site.strategy(config));
+  passport.use(
+    site.strategy({
+      clientID: config`DISCORD_CLIENT_ID`,
+      clientSecret: config`DISCORD_CLIENT_SECRET`,
+      callbackURL: site.callbackPath,
+      scope: ['identify', 'email'],
+    }),
+  );
   app.use(passport.initialize());
   app.use(passport.session());
   app.get(Site.authPath, passport.authenticate('discord'));
   app.get(
     site.callbackPath,
-    passport.authenticate('discord', { failureRedirect: '/' }),
+    passport.authenticate('discord', { failureRedirect: Site.badLoginPath }),
     (_req, res) => res.redirect(site.uploadPath), // Successful auth
   );
+  app.get(Site.badLoginPath, (_r, res) => res.send(Site.badLogin()));
 
   app.get(site.uploadPath, Site.checkAuth, (req, res) => {
-    const user = /** @type { DiscordUser } */ (req.user);
-    const formData = site.formData(user, clock());
+    const member = /** @type { GuildMember } */ (req.user);
+    const formData = site.formData(member, clock());
     // console.log({ formData });
-    res.send(Site.upload(formData));
+    res.send(Site.upload(member, formData));
   });
+  const testerID = '358096357862408195';
+  const tester = await guild.members(testerID);
+  app.get('/test', (_r, res) => res.send(Site.upload(tester, {})));
 
   console.log(base);
   app.listen(port);
@@ -371,7 +418,6 @@ if (require.main === module) {
       clock: () => Date.now(),
       express: require('express'),
       passport: require('passport'),
-      gcs: require('gcs-signed-urls'),
       get: require('https').get,
     },
   ).catch(err => console.error(err));
