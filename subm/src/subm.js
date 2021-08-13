@@ -15,18 +15,6 @@ const session = require('express-session');
 const { freeze } = Object; // please excuse freeze vs. harden
 
 /**
- * Ensure a value is not falsy.
- *
- * @param { T | null | undefined } it
- * @returns { T }
- * @template T
- */
-const the = it => {
-  if (!it) throw Error('must not be falsy');
-  return it;
-};
-
-/**
  * @param {string} host
  * @param {string} path
  * @param {Record<string, string>} headers
@@ -123,13 +111,34 @@ function DiscordAPI(token, { get }) {
   });
 }
 
-const Pages = freeze({
+const Site = freeze({
+  /**
+   * @param {string | undefined} project
+   * @param {string | undefined} hostConfig
+   * @param {string | undefined} portConfig
+   * @returns
+   */
+  base: (project, hostConfig, portConfig) => {
+    const port = parseInt(portConfig || '3000', 10);
+    const base = project
+      ? `https://${project}.wl.r.appspot.com`
+      : `http://${hostConfig || 'localhost'}:${port}`;
+    return { base, port };
+  },
+
   start: `
 <!doctype html>
 <title>Agoric Testnet Submission</title>
 
 <a href="/auth/discord">login to discord and upload</a>
 `,
+  authPath: '/auth/discord',
+
+  checkAuth: (req, res, next) => {
+    if (req.isAuthenticated()) return next();
+    res.send('not logged in :(');
+    return undefined;
+  },
 
   /**
    * Construct upload form.
@@ -173,6 +182,29 @@ function makeUploader(guild, storage) {
     callbackPath: '/auth/discord/callback',
     /** @param { string } base */
     callbackURL: base => new URL(self.callbackPath, base).toString(),
+
+    /**
+     * @param {TemplateTag} config
+     * @param {string} base
+     */
+    strategy: (config, base) =>
+      new discord.Strategy(
+        {
+          clientID: config`DISCORD_CLIENT_ID`,
+          clientSecret: config`DISCORD_CLIENT_SECRET`,
+          callbackURL: self.callbackPath,
+          scope: ['identify', 'email', 'guilds', 'guilds.join'],
+        },
+        async (_accessToken, _refreshToken, profile, cb) => {
+          try {
+            const user = await self.login(profile);
+            cb(null, user);
+          } catch (err) {
+            cb(err);
+          }
+        },
+      ),
+
     /**
      * @param {Express.User} user
      * @param {(e: Error | null, s: string) => string} done
@@ -206,18 +238,39 @@ function makeUploader(guild, storage) {
     },
 
     /**
-     * @param { string } fileName
-     * @param { string } key
+     * @param { DiscordUser } user
+     * @param { number } freshTime
      */
-    formData: (fileName, key) => storage.uploadRequest(fileName, key, true, {}),
+    formData: (user, freshTime) => {
+      // ISSUE: # in filename is asking for trouble
+      const userID = `${user.username}#${user.discriminator}`;
+      const fileName = `${userID}.slog.gz`;
+      const dt = new Date(freshTime).toISOString();
+      const freshKey = `${dt}-${fileName}`;
+      return storage.uploadRequest(fileName, freshKey, true, {});
+    },
   });
 
   return self;
 }
 
 /**
- *
- * @param {Record<string, string | undefined>} env
+ * @param { NodeJS.ProcessEnv } env
+ * @returns { TemplateTag }
+ * @typedef { (parts: TemplateStringsArray, ...args: unknown[]) => string } TemplateTag
+ */
+const makeConfig = env => {
+  return ([name], ..._args) => {
+    const value = env[name];
+    if (value === undefined) {
+      throw Error(`${name} not configured`);
+    }
+    return value;
+  };
+};
+
+/**
+ * @param { NodeJS.ProcessEnv } env
  * @param {{
  *   clock: () => number,
  *   get: typeof import('https').get,
@@ -227,56 +280,16 @@ function makeUploader(guild, storage) {
  * }} io
  */
 async function main(env, { clock, get, express, passport, gcs }) {
-  const port = parseInt(env.PORT || '3000', 10);
-  const base = env.GOOGLE_CLOUD_PROJECT
-    ? `https://${env.GOOGLE_CLOUD_PROJECT}.wl.r.appspot.com`
-    : `http://${env.HOST || 'localhost'}:${port}`;
-
-  /**
-   * @param { TemplateStringsArray } parts
-   * @param {...any} _args
-   */
-  const config = ([name], ..._args) => {
-    const value = env[name];
-    if (value === undefined) {
-      throw Error(`${name} not configured`);
-    }
-    return value;
-  };
-
-  const storage = gcs(
-    config`GCS_PRIVATE_KEY`,
-    config`GOOGLE_SERVICES_EMAIL`,
-    config`GCS_STORAGE_BUCKET`,
-  );
-  const guild = DiscordAPI(config`DISCORD_API_TOKEN`, { get }).guilds(
-    config`DISCORD_GUILD_ID`,
-  );
-  const site = makeUploader(guild, storage);
-
-  passport.serializeUser(site.serializeUser);
-  passport.deserializeUser(site.deserializeUser);
-
-  const strategy = new discord.Strategy(
-    {
-      clientID: config`DISCORD_CLIENT_ID`,
-      clientSecret: config`DISCORD_CLIENT_SECRET`,
-      callbackURL: site.callbackURL(base),
-      scope: ['identify', 'email', 'guilds', 'guilds.join'],
-      // proxy: true,
-    },
-    async (_accessToken, _refreshToken, profile, cb) => {
-      try {
-        const user = await site.login(profile);
-        cb(null, user);
-      } catch (err) {
-        cb(err);
-      }
-    },
-  );
-  passport.use(strategy);
-
   const app = express();
+  app.get('/', (_req, res) => res.send(Site.start));
+
+  const { base, port } = Site.base(
+    env.GOOGLE_CLOUD_PROJECT,
+    env.HOST,
+    env.PORT,
+  );
+
+  const config = makeConfig(env);
   app.use(
     session({
       secret: config`SUBM_SESSION_SECRET`,
@@ -284,28 +297,33 @@ async function main(env, { clock, get, express, passport, gcs }) {
       saveUninitialized: false,
     }),
   );
+
+  const storage = gcs(
+    config`GCS_PRIVATE_KEY`,
+    config`GOOGLE_SERVICES_EMAIL`,
+    config`GCS_STORAGE_BUCKET`,
+  );
+  const discordAPI = DiscordAPI(config`DISCORD_API_TOKEN`, { get });
+  const guild = discordAPI.guilds(config`DISCORD_GUILD_ID`);
+  const site = makeUploader(guild, storage);
+
+  passport.serializeUser(site.serializeUser);
+  passport.deserializeUser(site.deserializeUser);
+  passport.use(site.strategy(config, base));
   app.use(passport.initialize());
   app.use(passport.session());
-
-  app.get('/', (_req, res) => res.send(Pages.start));
-  app.get('/auth/discord', passport.authenticate('discord'));
+  app.get(Site.authPath, passport.authenticate('discord'));
   app.get(
     site.callbackPath,
     passport.authenticate('discord', { failureRedirect: '/' }),
     (_req, res) => res.redirect(site.uploadPath), // Successful auth
   );
-  function checkAuth(req, res, next) {
-    if (req.isAuthenticated()) return next();
-    res.send('not logged in :(');
-    return undefined;
-  }
-  app.get(site.uploadPath, checkAuth, (req, res) => {
-    const fileName = `${the(req.user)}.slog.gz`;
-    const ts = new Date(clock()).toISOString();
-    const freshKey = `${ts}-${fileName}`;
-    const formData = site.formData(fileName, freshKey);
+
+  app.get(site.uploadPath, Site.checkAuth, (req, res) => {
+    const user = /** @type { DiscordUser } */ (req.user);
+    const formData = site.formData(user, clock());
     // console.log({ formData });
-    res.send(Pages.upload(formData));
+    res.send(Site.upload(formData));
   });
 
   console.log(base);
