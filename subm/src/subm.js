@@ -129,25 +129,28 @@ const Site = freeze({
   <!doctype html>
   <head>
   <title>Agoric Testnet Submission</title>
-  <link rel='stylesheet' id='wp-block-library-css'  href='https://agoric.com/wp-includes/css/dist/block-library/style.min.css?ver=5.8' type='text/css' media='all' />
-  <link rel='stylesheet' id='vendor-css-css'  href='https://agoric.com/wp-content/themes/agoric_2021_theme/assets/css/vendor.min.css?ver=1.0.0.0' type='text/css' media='all' />
-  <link rel='stylesheet' id='main-css-css'  href='https://agoric.com/wp-content/themes/agoric_2021_theme/assets/css/style.min.css?ver=1.0.0.0' type='text/css' media='all' />
-  <link rel='stylesheet' id='custom-style-css'  href='https://agoric.com/wp-content/themes/agoric_2021_theme/style.css?ver=5.8' type='text/css' media='all' />
   </head>
 
   <div class="container">
   <nav>
-  <a href="https://agoric.com/">
-  <img alt="Agoric" align="bottom"
-     src="https://agoric.com/wp-content/themes/agoric_2021_theme/assets/img/logo.svg" />
-  </a> &middot; <a href="https://validate.agoric.com/">Incentivized Testnet</a>
+  <a href="https://agoric.com/"
+  ><img alt="Agoric" align="bottom"
+     src="https://agoric.com/wp-content/themes/agoric_2021_theme/assets/img/logo.svg"
+      /></a> &middot; <a href="https://validate.agoric.com/">Incentivized Testnet</a>
   </nav>
   <hr />
   `,
   start: () => `${Site.top}
 <h1>Incentivized Testnet Participants</h1>
 
-<form action="/auth/discord"><button type="submit">Login via Discord</button></form>
+<form action="/auth/discord">
+<fieldset>
+<legend>To Submit materials</legend>
+<large>
+<button type="submit">Login via Discord</button>
+</large>
+</fieldset>
+</form>
 </div>
 `,
   authPath: '/auth/discord',
@@ -179,6 +182,8 @@ ${Site.top}
 
 <form action="https://${bucket}.storage.googleapis.com"
       method="post" enctype="multipart/form-data">
+      <fieldset><legend>slogfile</legend>
+  <div>Suggested name: <code><em>moniker</em>-agorictest-<em>NN</em></code>.slog.gz</code></div>
 	<input type="text" name="key" value="${key}">
 	<input type="hidden" name="bucket" value="${bucket}">
 	<input type="hidden" name="GoogleAccessId" value="${GoogleAccessId}">
@@ -189,6 +194,8 @@ ${Site.top}
 
 	<input name="file" type="file">
 	<input type="submit" value="Upload">
+  <p><em><strong>NOTE:</strong> this page lacks feedback on when your upload finishes.</em></p>
+  </fieldset>
 </form>
   `,
 });
