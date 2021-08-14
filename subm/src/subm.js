@@ -399,9 +399,10 @@ async function main(env, { clock, get, express }) {
     // console.log({ formData });
     res.send(Site.upload(member, formData));
   });
-  const testerID = '358096357862408195';
-  const tester = await guild.members(testerID);
-  app.get('/test', (_r, res) => res.send(Site.upload(tester, {})));
+
+  // const testerID = '358096357862408195';
+  // const tester = await guild.members(testerID);
+  // app.get('/test', (_r, res) => res.send(Site.upload(tester, {})));
 
   console.log(base);
   app.listen(port);
