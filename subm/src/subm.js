@@ -71,7 +71,8 @@ const Site = freeze({
 
   testnetRoles: {
     'testnet-participant': '819067161371738173',
-    'testnet-teammate': '825108158744756226',
+    // TODO: support for many-to-one discord to moniker
+    // 'testnet-teammate': '825108158744756226',
     team: '754111409645682700',
   },
 
