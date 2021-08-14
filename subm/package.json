@@ -34,6 +34,7 @@
     "typescript": "^4.3.5"
   },
   "dependencies": {
+    "@google-cloud/datastore": "^6.4.7",
     "express": "^4.17.1",
     "express-session": "^1.17.2",
     "gcs-signed-urls": "^1.0.4",
