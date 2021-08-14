@@ -6,11 +6,12 @@
  * Data is stored in Google Cloud Storage.
  */
 
-/* global require */
+/* global require, Buffer */
 // @ts-check
 
 const discord = require('passport-discord'); // please excuse CJS
 const session = require('express-session');
+const Busboy = require('busboy');
 const passport = require('passport'); // Our usage is pure; we ignore the default singleton.
 const gcs = require('gcs-signed-urls'); // we use only pure parts
 
@@ -47,7 +48,8 @@ const Site = freeze({
   loginPath: '/auth/discord',
   callbackPath: '/auth/discord/callback',
   badLoginPath: '/loginRefused',
-  uploadPath: '/uploadForm',
+  uploadSlogPath: '/participant/slogForm',
+  uploadGenTxPath: '/participant/gentxForm',
 
   /**
    * @param {string | undefined} project
@@ -88,8 +90,35 @@ const Site = freeze({
   <form action="/"><button type="submit">Try again</button></form>
   `,
 
+  /** @param { GuildMember } member */
+  welcome: member => `
+    <figure>
+    <img class="avatar" src="${avatar(member.user)}" />
+    <figcaption>Welcome <b>${member.nick || 'participant'}</b>.</figcaption>
+    </figure>
+  `,
+
+  /** @param { GuildMember } member */
+  uploadGenTx: member => `${AgoricStyle.top}
+
+<h1>GenTx submission</h1>
+
+${Site.welcome(member)}
+
+<form action="${Site.uploadGenTxPath}"
+  method="post" enctype="multipart/form-data">
+  <fieldset><legend>slogfile</legend>
+<label>
+<input name="file" type="file">
+<input type="submit" value="Upload">
+</label>
+<p><em><strong>NOTE:</strong> this page lacks feedback on when your upload finishes.</em></p>
+</fieldset>
+</form>
+  `,
+
   /**
-   * Construct upload form.
+   * Construct slogfile upload form.
    *
    * WARNING: caller is responsible to see that values are html-injection-safe
    *
@@ -102,7 +131,7 @@ const Site = freeze({
    *  signature: string,
    * } & Record<string, string> } info
    */
-  upload: (
+  uploadSlog: (
     member,
     { GoogleAccessId, key, bucket, policy, signature, ...headers },
   ) => `
@@ -110,10 +139,7 @@ ${AgoricStyle.top}
 
 <h1>Swingset log (slogfile) submission</h1>
 
-<figure>
-<img class="avatar" src="${avatar(member.user)}" />
-<figcaption>Welcome <b>${member.nick || 'participant'}</b>.</figcaption>
-</figure>
+${Site.welcome(member)}
 
 <form action="https://${bucket}.storage.googleapis.com"
       method="post" enctype="multipart/form-data">
@@ -123,9 +149,8 @@ ${AgoricStyle.top}
 	<input type="hidden" name="policy" value="${policy}">
 	<input type="hidden" name="signature" value="${signature}">
   <input type="hidden" name="Content-Type" value="${headers['Content-Type']}">
-  <input type="hidden" name="Content-Disposition" value="${
-    headers['Content-Disposition']
-  }">
+  <input type="hidden" name="Content-Disposition"
+         value="${headers['Content-Disposition']}">
   <label>
     Suggested name: <code><em>moniker</em>-agorictest-<em>NN</em></code>.slog.gz</code><br />
 	  <input name="file" type="file">
@@ -292,14 +317,14 @@ async function main(env, { clock, get, express }) {
   app.get(
     Site.callbackPath,
     callbackHandler,
-    (_req, res) => res.redirect(Site.uploadPath), // Successful auth
+    (_req, res) => res.redirect(Site.uploadGenTxPath), // Successful auth
   );
   app.get(Site.badLoginPath, (_r, res) => res.send(Site.badLogin()));
 
   // Upload form
   // Note the actual upload request goes directly to Google Cloud Storage.
   app.get(
-    Site.uploadPath,
+    Site.uploadSlogPath,
     (req, res, next) =>
       req.isAuthenticated() ? next() : res.send('not logged in :('),
     (req, res) => {
@@ -307,11 +332,50 @@ async function main(env, { clock, get, express }) {
       const participant = makeTestnetParticipant(member, storage);
       const formData = participant.slogFormData(clock());
       // console.log({ formData });
-      const page = Site.upload(member, formData);
+      const page = Site.uploadSlog(member, formData);
       res.send(page);
     },
   );
+  app.get(
+    Site.uploadGenTxPath,
+    (req, res, next) =>
+      req.isAuthenticated() ? next() : res.send('not logged in :('),
+    (req, res) => {
+      const member = /** @type { GuildMember } */ (req.user);
+      res.send(Site.uploadGenTx(member));
+    },
+  );
 
+  app.post(
+    Site.uploadGenTxPath,
+    (req, res, next) =>
+      req.isAuthenticated() ? next() : res.send('not logged in :('),
+    (req, res) => {
+      const busboy = new Busboy({ headers: req.headers });
+      const parts = [];
+      const member = /** @type { GuildMember } */ (req.user);
+
+      busboy.on('file', (fieldname, file, filename, _encoding, _mimetype) => {
+        // console.log(`File [${fieldname}]: filename: ${filename}`);
+        file.on('data', data => {
+          parts.push(data);
+        });
+        file.on('end', () => {
+          // console.log(`File [${fieldname}] Finished`);
+        });
+      });
+      busboy.on('field', (fieldname, val, fieldnameTruncated, valTruncated) => {
+        console.log(`Field [${fieldname}]: value: ${inspect(val)}`);
+      });
+      busboy.on('finish', () => {
+        const content = Buffer.concat(parts);
+        console.log('Done parsing form! total:', content.length);
+        res.writeHead(303, { Connection: 'close', Location: '/' });
+        res.end();
+      });
+      req.pipe(busboy);
+    },
+  );
   // const testerID = '358096357862408195';
   // const tester = await guild.members(testerID);
   // app.get('/test', (_r, res) => res.send(Site.upload(tester, {})));
