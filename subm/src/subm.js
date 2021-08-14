@@ -11,6 +11,7 @@
 
 const discord = require('passport-discord'); // please excuse CJS
 const session = require('express-session');
+const passport = require('passport'); // Our usage is pure; we ignore the default singleton.
 const gcs = require('gcs-signed-urls'); // we use only pure parts
 
 const { freeze, keys, values } = Object; // please excuse freeze vs. harden
@@ -339,10 +340,9 @@ const makeConfig = env => {
  *   clock: () => number,
  *   get: typeof import('https').get,
  *   express: typeof import('express'),
- *   passport: typeof import('passport'),
  * }} io
  */
-async function main(env, { clock, get, express, passport }) {
+async function main(env, { clock, get, express }) {
   const app = express();
   app.enable('trust proxy'); // trust X-Forwarded-* headers
   app.get('/', (_req, res) => res.send(Site.start()));
@@ -372,9 +372,10 @@ async function main(env, { clock, get, express, passport }) {
   const guild = discordAPI.guilds(config`DISCORD_GUILD_ID`);
   const site = makeUploader(guild, storage);
 
-  passport.serializeUser(site.serializeUser);
-  passport.deserializeUser(site.deserializeUser);
-  passport.use(
+  const aPassport = new passport.Passport();
+  aPassport.serializeUser(site.serializeUser);
+  aPassport.deserializeUser(site.deserializeUser);
+  aPassport.use(
     site.strategy({
       clientID: config`DISCORD_CLIENT_ID`,
       clientSecret: config`DISCORD_CLIENT_SECRET`,
@@ -382,12 +383,12 @@ async function main(env, { clock, get, express, passport }) {
       scope: ['identify', 'email'],
     }),
   );
-  app.use(passport.initialize());
-  app.use(passport.session());
-  app.get(Site.authPath, passport.authenticate('discord'));
+  app.use(aPassport.initialize());
+  app.use(aPassport.session());
+  app.get(Site.authPath, aPassport.authenticate('discord'));
   app.get(
     site.callbackPath,
-    passport.authenticate('discord', { failureRedirect: Site.badLoginPath }),
+    aPassport.authenticate('discord', { failureRedirect: Site.badLoginPath }),
     (_req, res) => res.redirect(site.uploadPath), // Successful auth
   );
   app.get(Site.badLoginPath, (_r, res) => res.send(Site.badLogin()));
@@ -417,7 +418,6 @@ if (require.main === module) {
     {
       clock: () => Date.now(),
       express: require('express'),
-      passport: require('passport'),
       get: require('https').get,
     },
   ).catch(err => console.error(err));
