@@ -11,18 +11,24 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 
-def main(argv, cwd):
+def main(argv, stdout, cwd):
     log.info('versions: %s', dict(pandas=pd.__version__))
-    [portal_export] = argv[1:2]
+    [portal_export, dest] = argv[1:3]
 
+    tasks = load(cwd / portal_export)
+    tasks = check(tasks)
+    save(tasks, cwd / dest, stdout)
+
+
+def load(path):
     # ## Sumitted Tasks
     #
     # exported from the portal
 
-    task_export = pd.read_csv(cwd / portal_export,
+    task_export = pd.read_csv(path,
                               parse_dates=['Last Date Updated'])
 
-    log.info('portal update: %s', task_export.dtypes)
+    # log.info('portal update: %s', task_export.dtypes)
 
     # one completed task per participant
     tasks = dedup(
@@ -39,9 +45,10 @@ def main(argv, cwd):
     # ## Clean up markup
     #
     # The portal exports with newline as `<br>`.
-    log.info(
-        tasks[tasks['Submission Link'].str.contains('<br />')
-              .fillna(False)][['Submission Link']].head(8))
+    # log.info(
+    #     tasks[tasks['Submission Link'].str.contains('<br />')
+    #           .fillna(False)][['Submission Link']].head(8))
+    return tasks
 
 
 # +
@@ -52,7 +59,7 @@ def dedup(df,
 
     dups = df[df.duplicated([key], keep='last')].reset_index(drop=True).drop(
         ['Verified', 'Task Type', 'Event', 'Submission Link'], axis=1)
-    log.info('dups by %s:\n%s', key, dups)
+    log.warning('dropping dups by %s:\n%s', key, dups)
 
     return df.drop_duplicates([key], keep='last')
 
@@ -68,59 +75,46 @@ def tryjson(txt):
     except Exception as ex:
         return ex
 
-def _x():
-    tasks['gentx'] = nobr(tasks['Submission Link']).apply(lambda txt: tryjson(txt))
+
+def check(tasks):
+    tasks['gentx'] = nobr(tasks['Submission Link']).apply(
+        lambda txt: tryjson(txt))
     tasks['jsonErr'] = tasks.gentx.apply(lambda v: isinstance(v, Exception))
-    tasks[['jsonErr', 'gentx', 'Submission Link']][tasks.jsonErr]
-    # -
+    log.warning('JSON errors:\n%s',
+                tasks[['jsonErr', 'gentx', 'Submission Link']][tasks.jsonErr])
 
-    # ### Irreparable submissions
-
-    # +
-    tasks.loc[tasks.index.isin(links.index), 'gentx'] = links.gentx
-    tasks.loc[tasks.index.isin(links.index), 'jsonErr'] = False
-
-    tasks[['jsonErr', 'gentx', 'Submission Link']][tasks.jsonErr]
-    # -
-
-    # ## TODO: prune duplicates
-
-    # Duplicates are all fixing erros except `null#2319`, whose entries are all the same:
-
-    tasks[~tasks.jsonErr].loc[tasks[tasks.index.duplicated()].index.unique()]
-
-    len(set(json.dumps(v) for v in tasks.loc['null#2319'].gentx.values))
-
-    # ## cleaned data
-
-    ok = tasks[~tasks.jsonErr]
-    ok = ok[~ok.index.duplicated()].copy()
-    ok
-
-    # ## No duplicate Monikers
-
-    (ok.Moniker.value_counts() > 1).any()
+    log.info('Duplicate Monikers?\n%s',
+             (tasks.Moniker.value_counts() > 1).any())
 
     # ## No gentx with >50 BLD
 
-    ok['amount'] = ok.gentx.apply(lambda g: g['body']['messages'][0]['value']['amount']).astype('float') / 1000000.0
-    ok.amount.max()
+    tasks['amount'] = tasks.gentx.apply(
+        lambda g: g['body']['messages'][0]['value']['amount']
+    ).astype('float') / 1000000.0
 
-    ok.amount.describe()
+    over50 = tasks[tasks.amount > 50]
+    if len(over50):
+        log.warning('No gentx with >50 BLD\n%s', over50)
 
-    # ## Results
+    return tasks
 
-    len(ok)
 
-    alljson = json.dumps([tx for tx in ok.gentx.values], indent=2)
-    (_home() / 'Desktop' / 'genesis.json').open('w').write(alljson)
+def save(tasks, dest, stdout):
+    # alljson = json.dumps([tx for tx in tasks.gentx.values], indent=2)
+    # (_home() / 'Desktop' / 'genesis.json').open('w').write(alljson)
+
+    dest.mkdir(parents=True, exist_ok=True)
 
     # ## separate files
 
-    for ix, info in ok[['gentx']].reset_index().iterrows():
-        path = _home() / 'Desktop' / 'gentx3' / f'gentx{ix}.json'
+    for ix, info in tasks[['gentx']].reset_index().iterrows():
+        path = dest / f'gentx{ix}.json'
         json.dump(info.gentx, path.open('w'))
 
+    tasks[['Discord ID', 'Moniker', 'Last Date Updated']].to_csv(stdout)
+
+
+def _more_checks():
     # ## duplicate pubkeys
 
     filestuff = [json.load(p.open()) for p in (_home() / 'Desktop' / 'gentx3').iterdir()]
@@ -143,7 +137,7 @@ def _x():
 
 if __name__ == '__main__':
     def _script():
-        from sys import argv, stderr
+        from sys import argv, stdout, stderr
         from pathlib import Path
 
         logging.basicConfig(
@@ -151,6 +145,6 @@ if __name__ == '__main__':
             format='%(asctime)s %(levelname)s: %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S')
 
-        main(argv[:], cwd=Path('.'))
+        main(argv[:], stdout, cwd=Path('.'))
 
     _script()
