@@ -16,7 +16,7 @@ def main(argv, stdout, cwd):
     [portal_export, dest] = argv[1:3]
 
     tasks = load(cwd / portal_export)
-    tasks = check(tasks)
+    tasks = extract(tasks)
     save(tasks, cwd / dest, stdout)
 
 
@@ -31,9 +31,7 @@ def load(path):
     # log.info('portal update: %s', task_export.dtypes)
 
     # one completed task per participant
-    tasks = dedup(
-        task_export[task_export.Status == 'Completed'].set_index('TaskBoardID')
-    )
+    tasks = mark_dups(task_export.set_index('TaskBoardID'))
 
     log.info('tasks: %s',
              (dict(submissions_all=len(task_export), deduped=len(tasks),
@@ -52,16 +50,18 @@ def load(path):
 
 
 # +
-def dedup(df,
-          key='Discord ID',
-          boring=['Verified', 'Task Type', 'Event', 'Submission Link']):
+def mark_dups(df,
+              key='Discord ID',
+              boring=['Verified', 'Task Type', 'Event', 'Submission Link']):
     """one per participant"""
 
-    dups = df[df.duplicated([key], keep='last')].reset_index(drop=True).drop(
-        ['Verified', 'Task Type', 'Event', 'Submission Link'], axis=1)
+    df.Status[df[df.Status == 'Completed'].duplicated([key], keep='last')] = 'Obsolete'
+    dups = df[df.Status == 'Obsolete'].reset_index(drop=True).drop(
+        boring, axis=1)
+
     log.warning('dropping dups by %s:\n%s', key, dups)
 
-    return df.drop_duplicates([key], keep='last')
+    return df
 
 
 # +
@@ -76,7 +76,7 @@ def tryjson(txt):
         return ex
 
 
-def check(tasks):
+def extract(tasks):
     tasks['gentx'] = nobr(tasks['Submission Link']).apply(
         lambda txt: tryjson(txt))
     tasks['jsonErr'] = tasks.gentx.apply(lambda v: isinstance(v, Exception))
@@ -88,7 +88,7 @@ def check(tasks):
 
     # ## No gentx with >50 BLD
 
-    tasks['amount'] = tasks.gentx.apply(
+    tasks['amount'] = tasks[~tasks.jsonErr].gentx.apply(
         lambda g: g['body']['messages'][0]['value']['amount']
     ).astype('float') / 1000000.0
 
@@ -107,11 +107,14 @@ def save(tasks, dest, stdout):
 
     # ## separate files
 
-    for ix, info in tasks[['gentx']].reset_index().iterrows():
+    ok = tasks[(tasks.Status == 'Completed') &
+               ~tasks.jsonErr]
+    for ix, info in ok[['gentx']].reset_index().iterrows():
         path = dest / f'gentx{ix}.json'
         json.dump(info.gentx, path.open('w'))
 
-    tasks[['Discord ID', 'Moniker', 'Last Date Updated']].to_csv(stdout)
+    tasks[['Discord ID', 'Moniker', 'Status', 'jsonErr',
+           'Last Date Updated']].reset_index().to_csv(stdout)
 
 
 def _more_checks():
