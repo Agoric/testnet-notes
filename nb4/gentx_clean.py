@@ -9,7 +9,7 @@ import logging
 import pandas as pd
 
 log = logging.getLogger(__name__)
-
+BORING = ['Verified', 'Task Type', 'Event', 'Submission Link']
 
 def main(argv, stdout, cwd):
     log.info('versions: %s', dict(pandas=pd.__version__))
@@ -33,9 +33,6 @@ def load(path):
     # one completed task per participant
     tasks = mark_dups(task_export.set_index('TaskBoardID'))
 
-    log.info('tasks: %s',
-             (dict(submissions_all=len(task_export), deduped=len(tasks),
-                   dups=len(task_export) - len(tasks))))
     log.info('tasks:\n%s',
              tasks.drop(['Status', 'Verified', 'Task Type', 'Event',
                          'Submission Link'], axis=1).head())
@@ -51,15 +48,20 @@ def load(path):
 
 # +
 def mark_dups(df,
-              key='Discord ID',
-              boring=['Verified', 'Task Type', 'Event', 'Submission Link']):
+              key='Discord ID'):
     """one per participant"""
 
-    df.Status[df[df.Status == 'Completed'].duplicated([key], keep='last')] = 'Obsolete'
+    df = df.sort_values(['Discord ID', 'Last Date Updated'])
+    dupd = df[df.Status == 'Completed'].duplicated([key], keep='last')
+    df.loc[dupd, 'Status'] = 'Obsolete'
     dups = df[df.Status == 'Obsolete'].reset_index(drop=True).drop(
-        boring, axis=1)
+        BORING, axis=1)
 
     log.warning('dropping dups by %s:\n%s', key, dups)
+
+    log.info('tasks: %s',
+             (dict(submissions_all=len(df), deduped=len(df) - len(dups),
+                   dups=len(dups))))
 
     return df
 
@@ -83,8 +85,11 @@ def extract(tasks):
     log.warning('JSON errors:\n%s',
                 tasks[['jsonErr', 'gentx', 'Submission Link']][tasks.jsonErr])
 
-    log.info('Duplicate Monikers?\n%s',
-             (tasks.Moniker.value_counts() > 1).any())
+    dup_moniker = tasks[tasks.Status == 'Completed'].sort_values('Moniker')
+    dup_moniker = dup_moniker[dup_moniker.duplicated('Moniker')]
+    dup_moniker = dup_moniker.drop(columns=BORING)
+    if len(dup_moniker):
+        log.warning('Duplicate Monikers?\n%s', dup_moniker)
 
     # ## No gentx with >50 BLD
 
@@ -113,6 +118,7 @@ def save(tasks, dest, stdout):
         path = dest / f'gentx{ix}.json'
         json.dump(info.gentx, path.open('w'))
 
+    tasks = tasks.sort_values(['Discord ID', 'Last Date Updated'])
     tasks[['Discord ID', 'Moniker', 'Status', 'jsonErr',
            'Last Date Updated']].reset_index().to_csv(stdout)
 
