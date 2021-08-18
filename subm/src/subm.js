@@ -17,6 +17,7 @@ const gcs = require('gcs-signed-urls'); // we use only pure parts
 
 const { DiscordAPI, avatar } = require('./discordGuild.js');
 /** @typedef { import('./discordGuild.js').GuildMember } GuildMember */
+const { makeFirebaseAdmin, getFirebaseConfig } = require('./firebaseTool.js');
 
 const { freeze, keys, values } = Object; // please excuse freeze vs. harden
 
@@ -50,6 +51,7 @@ const Site = freeze({
   badLoginPath: '/loginRefused',
   uploadSlogPath: '/participant/slogForm',
   uploadGenTxPath: '/participant/gentxForm',
+  loadGenKeyPath: '/participant/loadGenKey',
 
   /**
    * @param {string | undefined} project
@@ -101,7 +103,7 @@ const Site = freeze({
   /** @param { GuildMember } member */
   uploadGenTx: member => `${AgoricStyle.top}
 
-<h1>GenTx submission</h1>
+<h1>Testnet Admin</h1>
 
 ${Site.welcome(member)}
 
@@ -115,7 +117,26 @@ ${Site.welcome(member)}
 <p><em><strong>NOTE:</strong> this page lacks feedback on when your upload finishes.</em></p>
 </fieldset>
 </form>
+
+<h2>Load Generator Key</h1>
+<p>See: <a href='${Site.loadGenKeyPath}'>load generator key</a>.</p>
   `,
+
+  /**
+   * @param { GuildMember } member
+   * @param { string } combinedToken
+   */
+  loadGenKey: (member, combinedToken) => `${AgoricStyle.top}
+
+    <h1>LoadGen Key</h1>
+
+    ${Site.welcome(member)}
+
+    <p>Please execute:</p>
+    <textarea readonly cols='80' rows='24'
+    >curl -s -X PUT --data '${combinedToken}' http://127.0.0.1:3352/push-config
+    </textarea>
+      `,
 
   /**
    * Construct slogfile upload form.
@@ -228,9 +249,12 @@ function makeDiscordBot(guild, authorizedRoles, opts) {
 /**
  * @param {GuildMember} member
  * @param {ReturnType<typeof import('gcs-signed-urls')>} storage
+ * @param { ReturnType<import('./firebaseTool.js').makeFirebaseAdmin> } loadGenAdmin
  */
-function makeTestnetParticipant(member, storage) {
+function makeTestnetParticipant(member, storage, loadGenAdmin) {
   if (!member.user) throw RangeError();
+  const { user } = member;
+  const userID = `${user.username}#${user.discriminator}`;
 
   return freeze({
     user: member.user,
@@ -238,16 +262,14 @@ function makeTestnetParticipant(member, storage) {
      * @param { number } freshTime
      */
     slogFormData: freshTime => {
-      const { user } = member;
-      if (!user) throw TypeError('corrupted session');
-
       // ISSUE: # in filename is asking for trouble
-      const userID = `${user.username}#${user.discriminator}`;
       const fileName = `${userID}.slog.gz`;
       const dt = new Date(freshTime).toISOString();
       const freshKey = `${dt}-${fileName}`;
       return storage.uploadRequest(fileName, freshKey, true, {});
     },
+
+    loadGenKey: () => loadGenAdmin.generateCustomToken(userID),
   });
 }
 
@@ -272,9 +294,10 @@ const makeConfig = env => {
  *   clock: () => number,
  *   get: typeof import('https').get,
  *   express: typeof import('express'),
+ *   admin: typeof import('firebase-admin')
  * }} io
  */
-async function main(env, { clock, get, express }) {
+async function main(env, { clock, get, express, admin }) {
   const app = express();
   app.enable('trust proxy'); // trust X-Forwarded-* headers
   app.get('/', (_req, res) => res.send(Site.start()));
@@ -306,6 +329,8 @@ async function main(env, { clock, get, express }) {
     callbackURL: Site.callbackPath,
     scope: ['identify', 'email'],
   });
+  const loadGenAdmin = makeFirebaseAdmin(admin, getFirebaseConfig(config));
+  loadGenAdmin.init();
 
   // OAuth 2 flow
   const { aPassport, loginHandler, callbackHandler } = bot.passport(
@@ -329,13 +354,26 @@ async function main(env, { clock, get, express }) {
       req.isAuthenticated() ? next() : res.send('not logged in :('),
     (req, res) => {
       const member = /** @type { GuildMember } */ (req.user);
-      const participant = makeTestnetParticipant(member, storage);
+      const participant = makeTestnetParticipant(member, storage, loadGenAdmin);
       const formData = participant.slogFormData(clock());
       // console.log({ formData });
       const page = Site.uploadSlog(member, formData);
       res.send(page);
     },
   );
+
+  app.get(
+    Site.loadGenKeyPath,
+    (req, res, next) =>
+      req.isAuthenticated() ? next() : res.send('not logged in :('),
+    async (req, res) => {
+      const member = /** @type { GuildMember } */ (req.user);
+      const participant = makeTestnetParticipant(member, storage, loadGenAdmin);
+      const token = await participant.loadGenKey();
+      res.send(Site.loadGenKey(member, token));
+    },
+  );
+
   app.get(
     Site.uploadGenTxPath,
     (req, res, next) =>
@@ -399,6 +437,7 @@ if (require.main === module) {
       clock: () => Date.now(),
       express: require('express'),
       get: require('https').get,
+      admin: require('firebase-admin'),
     },
   ).catch(err => console.error(err));
 }
