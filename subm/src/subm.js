@@ -252,7 +252,11 @@ function makeTestnetParticipant(member, storage, loadGenAdmin) {
       return storage.uploadRequest(fileName, freshKey, true, {});
     },
 
-    loadGenKey: () => loadGenAdmin.generateCustomToken(userID),
+    loadGenKey: () =>
+      loadGenAdmin.generateCustomToken(
+        // firebase doesn't support # in paths...
+        encodeURIComponent(userID).replace(/\./g, '%2E'),
+      ),
   });
 }
 
