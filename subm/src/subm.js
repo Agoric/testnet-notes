@@ -353,9 +353,9 @@ async function main(env, { clock, get, express }) {
     (req, res) => {
       const busboy = new Busboy({ headers: req.headers });
       const parts = [];
-      const member = /** @type { GuildMember } */ (req.user);
+      // const member = /** @type { GuildMember } */ (req.user);
 
-      busboy.on('file', (fieldname, file, filename, _encoding, _mimetype) => {
+      busboy.on('file', (_fieldname, file, _filename, _encoding, _mimetype) => {
         // console.log(`File [${fieldname}]: filename: ${filename}`);
         file.on('data', data => {
           parts.push(data);
@@ -364,9 +364,12 @@ async function main(env, { clock, get, express }) {
           // console.log(`File [${fieldname}] Finished`);
         });
       });
-      busboy.on('field', (fieldname, val, fieldnameTruncated, valTruncated) => {
-        console.log(`Field [${fieldname}]: value: ${inspect(val)}`);
-      });
+      busboy.on(
+        'field',
+        (fieldname, val, _fieldnameTruncated, _valTruncated) => {
+          console.log(`Field [${fieldname}]: value: ${inspect(val)}`);
+        },
+      );
       busboy.on('finish', () => {
         const content = Buffer.concat(parts);
         console.log('Done parsing form! total:', content.length);
