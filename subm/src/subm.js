@@ -196,21 +196,25 @@ function makeDiscordBot(guild, authorizedRoles, opts) {
         opts,
         // TODO: refreshToken handling
         async (_accessToken, _refreshToken, profile, cb) => {
-          const { id } = profile;
-          const member = await guild.members(id);
+          try {
+            const { id } = profile;
+            const member = await guild.members(id);
 
-          const message = checkParticipant(member);
-          if (message) {
-            console.warn(message);
-            return cb(null, false, { message });
+            const message = checkParticipant(member);
+            if (message) {
+              console.warn(message);
+              return cb(null, false, { message });
+            }
+            if (!member.user) {
+              const noUser = `undefined user in GuildMember ${id}`;
+              console.warn(noUser);
+              cb(null, false, { message: noUser });
+            }
+            console.info('login', member);
+            return cb(null, member);
+          } catch (err) {
+            return cb(err);
           }
-          if (!member.user) {
-            const noUser = `undefined user in GuildMember ${id}`;
-            console.warn(noUser);
-            cb(null, false, { message: noUser });
-          }
-          console.info('login', member);
-          return cb(null, member);
         },
       );
       aPassport.use(strategy);
@@ -346,10 +350,22 @@ async function main(env, { clock, get, express, admin }) {
     (req, res, next) =>
       req.isAuthenticated() ? next() : res.send('not logged in :('),
     async (req, res) => {
-      const member = /** @type { GuildMember } */ (req.user);
-      const participant = makeTestnetParticipant(member, storage, loadGenAdmin);
-      const token = await participant.loadGenKey();
-      res.send(Site.loadGenKey(member, token));
+      try {
+        const member = /** @type { GuildMember } */ (req.user);
+        const participant = makeTestnetParticipant(
+          member,
+          storage,
+          loadGenAdmin,
+        );
+        const token = await participant.loadGenKey();
+        res.send(Site.loadGenKey(member, token));
+      } catch (err) {
+        res.status(err.status || 500);
+        res.render('error', {
+          message: err.message,
+          error: app.get('env') === 'development' ? err : {},
+        });
+      }
     },
   );
 
