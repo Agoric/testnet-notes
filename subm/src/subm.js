@@ -6,12 +6,11 @@
  * Data is stored in Google Cloud Storage.
  */
 
-/* global require, Buffer */
+/* global require */
 // @ts-check
 
 const discord = require('passport-discord'); // please excuse CJS
 const session = require('express-session');
-const Busboy = require('busboy');
 const passport = require('passport'); // Our usage is pure; we ignore the default singleton.
 const gcs = require('gcs-signed-urls'); // we use only pure parts
 
@@ -50,7 +49,6 @@ const Site = freeze({
   callbackPath: '/auth/discord/callback',
   badLoginPath: '/loginRefused',
   uploadSlogPath: '/participant/slogForm',
-  uploadGenTxPath: '/participant/gentxForm',
   loadGenKeyPath: '/participant/loadGenKey',
 
   /**
@@ -100,28 +98,6 @@ const Site = freeze({
     </figure>
   `,
 
-  /** @param { GuildMember } member */
-  uploadGenTx: member => `${AgoricStyle.top}
-
-<h1>Testnet Admin</h1>
-
-${Site.welcome(member)}
-
-<form action="${Site.uploadGenTxPath}"
-  method="post" enctype="multipart/form-data">
-  <fieldset><legend>slogfile</legend>
-<label>
-<input name="file" type="file">
-<input type="submit" value="Upload">
-</label>
-<p><em><strong>NOTE:</strong> this page lacks feedback on when your upload finishes.</em></p>
-</fieldset>
-</form>
-
-<h2>Load Generator Key</h1>
-<p>See: <a href='${Site.loadGenKeyPath}'>load generator key</a>.</p>
-  `,
-
   /**
    * @param { GuildMember } member
    * @param { string } combinedToken
@@ -158,7 +134,7 @@ ${Site.welcome(member)}
   ) => `
 ${AgoricStyle.top}
 
-<h1>Swingset log (slogfile) submission</h1>
+<h1>Testnet Admin</h1>
 
 ${Site.welcome(member)}
 
@@ -181,7 +157,10 @@ ${Site.welcome(member)}
 	<label><em>storage key:</em> <input type="text" readonly name="key" value="${key}" /></label>
   </fieldset>
 </form>
-  `,
+
+<h2>Load Generator Key</h1>
+<p>See: <a href='${Site.loadGenKeyPath}'>load generator key</a>.</p>
+`,
 });
 
 /**
@@ -342,7 +321,7 @@ async function main(env, { clock, get, express, admin }) {
   app.get(
     Site.callbackPath,
     callbackHandler,
-    (_req, res) => res.redirect(Site.uploadGenTxPath), // Successful auth
+    (_req, res) => res.redirect(Site.uploadSlogPath), // Successful auth
   );
   app.get(Site.badLoginPath, (_r, res) => res.send(Site.badLogin()));
 
@@ -374,49 +353,6 @@ async function main(env, { clock, get, express, admin }) {
     },
   );
 
-  app.get(
-    Site.uploadGenTxPath,
-    (req, res, next) =>
-      req.isAuthenticated() ? next() : res.send('not logged in :('),
-    (req, res) => {
-      const member = /** @type { GuildMember } */ (req.user);
-      res.send(Site.uploadGenTx(member));
-    },
-  );
-
-  app.post(
-    Site.uploadGenTxPath,
-    (req, res, next) =>
-      req.isAuthenticated() ? next() : res.send('not logged in :('),
-    (req, res) => {
-      const busboy = new Busboy({ headers: req.headers });
-      const parts = [];
-      // const member = /** @type { GuildMember } */ (req.user);
-
-      busboy.on('file', (_fieldname, file, _filename, _encoding, _mimetype) => {
-        // console.log(`File [${fieldname}]: filename: ${filename}`);
-        file.on('data', data => {
-          parts.push(data);
-        });
-        file.on('end', () => {
-          // console.log(`File [${fieldname}] Finished`);
-        });
-      });
-      busboy.on(
-        'field',
-        (fieldname, val, _fieldnameTruncated, _valTruncated) => {
-          console.log(`Field [${fieldname}]: value: ${inspect(val)}`);
-        },
-      );
-      busboy.on('finish', () => {
-        const content = Buffer.concat(parts);
-        console.log('Done parsing form! total:', content.length);
-        res.writeHead(303, { Connection: 'close', Location: '/' });
-        res.end();
-      });
-      req.pipe(busboy);
-    },
-  );
   // const testerID = '358096357862408195';
   // const tester = await guild.members(testerID);
   // app.get('/test', (_r, res) => res.send(Site.upload(tester, {})));
