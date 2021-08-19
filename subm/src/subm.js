@@ -334,7 +334,7 @@ async function main(env, { clock, get, express, admin }) {
   app.get(
     Site.uploadSlogPath,
     (req, res, next) =>
-      req.isAuthenticated() ? next() : res.send('not logged in :('),
+      req.isAuthenticated() ? next() : res.send(Site.badLogin()),
     (req, res) => {
       const member = /** @type { GuildMember } */ (req.user);
       const participant = makeTestnetParticipant(member, storage, loadGenAdmin);
@@ -348,7 +348,7 @@ async function main(env, { clock, get, express, admin }) {
   app.get(
     Site.loadGenKeyPath,
     (req, res, next) =>
-      req.isAuthenticated() ? next() : res.send('not logged in :('),
+      req.isAuthenticated() ? next() : res.send(Site.badLogin()),
     async (req, res) => {
       try {
         const member = /** @type { GuildMember } */ (req.user);
