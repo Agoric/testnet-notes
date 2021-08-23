@@ -54,10 +54,10 @@ def mark_dups(df,
     df = df.sort_values(['Discord ID', 'Last Date Updated'])
     dupd = df[df.Status == 'Completed'].duplicated([key], keep='last')
     df.loc[dupd, 'Status'] = 'Obsolete'
-    dups = df[df.Status == 'Obsolete'].reset_index(drop=True).drop(
+    dups = df[df.Status == 'Obsolete'].reset_index().drop(
         BORING, axis=1)
 
-    log.warning('dropping dups by %s:\n%s', key, dups)
+    log.warning('dropping dups by %s:\n%s', key, dups[['TaskBoardID', 'Discord ID', 'Moniker']])
 
     log.info('tasks: %s',
              (dict(submissions_all=len(df), deduped=len(df) - len(dups),
@@ -83,7 +83,7 @@ def extract(tasks):
         lambda txt: tryjson(txt))
     tasks['jsonErr'] = tasks.gentx.apply(lambda v: isinstance(v, Exception))
     log.warning('JSON errors:\n%s',
-                tasks[['jsonErr', 'gentx', 'Submission Link']][tasks.jsonErr])
+                tasks[['Discord ID', 'Moniker', 'jsonErr']][tasks.jsonErr])
 
     dup_moniker = tasks[tasks.Status == 'Completed'].sort_values('Moniker')
     dup_moniker = dup_moniker[dup_moniker.duplicated('Moniker')]
