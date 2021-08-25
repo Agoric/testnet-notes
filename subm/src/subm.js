@@ -142,6 +142,7 @@ ${Site.welcome(member)}
       method="post" enctype="multipart/form-data">
       <fieldset><legend>slogfile</legend>
 	<input type="hidden" name="bucket" value="${bucket}">
+	<label><em>storage key:</em> <input type="text" readonly name="key" value="${key}" /></label>
 	<input type="hidden" name="GoogleAccessId" value="${GoogleAccessId}">
 	<input type="hidden" name="policy" value="${policy}">
 	<input type="hidden" name="signature" value="${signature}">
@@ -154,7 +155,6 @@ ${Site.welcome(member)}
     <input type="submit" value="Upload">
   </label>
   <p><em><strong>NOTE:</strong> this page lacks feedback on when your upload finishes.</em></p>
-	<label><em>storage key:</em> <input type="text" readonly name="key" value="${key}" /></label>
   </fieldset>
 </form>
 
