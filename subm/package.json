@@ -35,6 +35,7 @@
     "typescript": "^4.3.5"
   },
   "dependencies": {
+    "@google-cloud/bigquery": "^5.8.0",
     "@google-cloud/datastore": "^6.4.7",
     "express": "^4.17.1",
     "express-session": "^1.17.2",
