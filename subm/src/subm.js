@@ -44,6 +44,10 @@ const AgoricStyle = freeze({
   `,
 });
 
+/** @type {(n: number, lp?: number) => string} */
+const numeral = (n, lp = 0) =>
+  `${' '.repeat(lp)}${n.toLocaleString()}`.slice(-lp);
+
 const Site = freeze({
   loginPath: '/auth/discord',
   callbackPath: '/auth/discord/callback',
@@ -127,10 +131,12 @@ const Site = freeze({
    *  policy: string,
    *  signature: string,
    * } & Record<string, string> } info
+   * @param { { name: string}[] } files
    */
   uploadSlog: (
     member,
     { GoogleAccessId, key, bucket, policy, signature, ...headers },
+    files,
   ) => `
 ${AgoricStyle.top}
 
@@ -141,8 +147,26 @@ ${Site.welcome(member)}
 <form action="https://${bucket}.storage.googleapis.com"
       method="post" enctype="multipart/form-data">
       <fieldset><legend>slogfile</legend>
-	<input type="hidden" name="bucket" value="${bucket}">
-	<label><em>storage key:</em> <input type="text" readonly name="key" value="${key}" /></label>
+
+  <p><em><strong>NOTE:</strong> this form lacks feedback on when your upload finishes.</em><br />
+
+  You can check this list to see if your file arrived:</p>
+  <textarea readonly rows=8 cols=100>
+md5Hash                      size       name
+${files
+  .sort((a, b) => (a.name < b.name ? -1 : 1))
+  .map(
+    ({ name, metadata: { md5Hash, size } }) =>
+      `${md5Hash} ${numeral(size | 0, 14)} ${name}`,
+  )
+  .join('\n')}
+  </textarea>
+  <input type="hidden" name="bucket" value="${bucket}">
+	<label><em>storage key:</em> <input type="text" readonly name="key" value="${key}" />
+  <br />
+  <strong>NOTE:</strong> if you get an <code>Access denied. ... does not have storage.objects.delete access ...</code>
+  error, your storage key has already been used. Reload the page to get a new one.
+  </label>
 	<input type="hidden" name="GoogleAccessId" value="${GoogleAccessId}">
 	<input type="hidden" name="policy" value="${policy}">
 	<input type="hidden" name="signature" value="${signature}">
@@ -154,7 +178,6 @@ ${Site.welcome(member)}
 	  <input name="file" type="file">
     <input type="submit" value="Upload">
   </label>
-  <p><em><strong>NOTE:</strong> this page lacks feedback on when your upload finishes.</em></p>
   </fieldset>
 </form>
 
@@ -277,10 +300,11 @@ const makeConfig = env => {
  *   clock: () => number,
  *   get: typeof import('https').get,
  *   express: typeof import('express'),
+ *   Storage: typeof import('@google-cloud/storage').Storage,
  *   admin: typeof import('firebase-admin')
  * }} io
  */
-async function main(env, { clock, get, express, admin }) {
+async function main(env, { clock, get, express, Storage, admin }) {
   const app = express();
   app.enable('trust proxy'); // trust X-Forwarded-* headers
   app.get('/', (_req, res) => res.send(Site.start()));
@@ -298,6 +322,8 @@ async function main(env, { clock, get, express, admin }) {
       saveUninitialized: false,
     }),
   );
+
+  const cloudStore = new Storage();
 
   const storage = gcs(
     config`GCS_PRIVATE_KEY`,
@@ -335,13 +361,28 @@ async function main(env, { clock, get, express, admin }) {
     Site.uploadSlogPath,
     (req, res, next) =>
       req.isAuthenticated() ? next() : res.send(Site.badLogin()),
-    (req, res) => {
-      const member = /** @type { GuildMember } */ (req.user);
-      const participant = makeTestnetParticipant(member, storage, loadGenAdmin);
-      const formData = participant.slogFormData(clock());
-      // console.log({ formData });
-      const page = Site.uploadSlog(member, formData);
-      res.send(page);
+    async (req, res) => {
+      try {
+        const member = /** @type { GuildMember } */ (req.user);
+        const participant = makeTestnetParticipant(
+          member,
+          storage,
+          loadGenAdmin,
+        );
+        const formData = participant.slogFormData(clock());
+        // console.log({ formData });
+        const [files] = await cloudStore
+          .bucket(config`GCS_STORAGE_BUCKET`)
+          .getFiles();
+        const page = Site.uploadSlog(member, formData, files);
+        res.send(page);
+      } catch (err) {
+        res.status(err.status || 500);
+        res.render('error', {
+          message: err.message,
+          error: app.get('env') === 'development' ? err : {},
+        });
+      }
     },
   );
 
@@ -389,6 +430,7 @@ if (require.main === module) {
       clock: () => Date.now(),
       express: require('express'),
       get: require('https').get,
+      Storage: require('@google-cloud/storage').Storage,
       admin: require('firebase-admin'),
     },
   ).catch(err => console.error(err));
