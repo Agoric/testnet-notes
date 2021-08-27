@@ -351,6 +351,7 @@ async function main(env, { clock, get, express, makeStorage, admin }) {
 
   const config = makeConfig(env);
   app.use(
+    // @ts-ignore Argument of type 'Function' is not assignable to parameter of type 'PathParams'
     session({
       secret: config`SUBM_SESSION_SECRET`,
       resave: false,

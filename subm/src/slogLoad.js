@@ -1,3 +1,4 @@
+/* global require */
 // Import the Google Cloud client libraries
 const { BigQuery } = require('@google-cloud/bigquery');
 const { Storage } = require('@google-cloud/storage');
@@ -78,6 +79,9 @@ async function loadJSONFromGCS() {
   }
 }
 
-// createDataset().catch(err => console.error(err));
-
-loadJSONFromGCS().catch(err => console.error(err));
+/* global process */
+if (process.argv.includes('--create')) {
+  createDataset().catch(err => console.error(err));
+} else {
+  loadJSONFromGCS().catch(err => console.error(err));
+}
