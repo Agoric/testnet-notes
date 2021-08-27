@@ -20,6 +20,9 @@ const { generateV4SignedPolicy } = require('./objStore.js');
 
 const { freeze, keys, values, entries } = Object; // please excuse freeze vs. harden
 
+/** @type {(digits: string) => string} */
+const fmtNum = digits => parseInt(digits, 10).toLocaleString();
+
 const AgoricStyle = freeze({
   top: `
   <!doctype html>
@@ -29,6 +32,9 @@ const AgoricStyle = freeze({
     label { display: block; padding: .5em }
     .avatar {
       border-radius: 10%; padding: 5x; border 1px solid #ddd;
+    }
+    table {
+      border-collapse: collapse;
     }
   </style>
   </head>
@@ -48,19 +54,17 @@ const AgoricStyle = freeze({
   `,
 });
 
-/** @type {(n: number, lp?: number) => string} */
-const numeral = (n, lp = 0) =>
-  `${' '.repeat(lp)}${n.toLocaleString()}`.slice(-lp);
-
 const Site = freeze({
-  loginPath: '/auth/discord',
-  callbackPath: '/auth/discord/callback',
-  badLoginPath: '/loginRefused',
-  uploadSlogPath: '/participant/slogForm',
-  uploadSuccessPath: '/participant/slogOK',
+  path: {
+    login: '/auth/discord',
+    callback: '/auth/discord/callback',
+    badLogin: '/loginRefused',
+    uploadSlog: '/participant/slogForm',
+    uploadSuccess: '/participant/slogOK',
+    loadGenKey: '/participant/loadGenKey',
+  },
   /** @param { string } base */
-  uploadSuccessURL: base => `${new URL(Site.uploadSuccessPath, base)}`,
-  loadGenKeyPath: '/participant/loadGenKey',
+  uploadSuccessURL: base => `${new URL(Site.path.uploadSuccess, base)}`,
 
   /**
    * @param {string | undefined} project
@@ -127,16 +131,25 @@ const Site = freeze({
 
   /** @param { FileInfo[] } files */
   fileList: files => `
-    <textarea readonly rows=8 cols=100
-    >md5Hash                      size       name
-    \n${files
+    <div><h3>Your Existing Files</h3>
+    <table border>
+    <thead><tr><th>Name</th><th>Size</th><th>md5Hash</th></tr></thead>
+    <tbody>
+    ${files
       .sort((a, b) => (a.name < b.name ? -1 : 1))
       .map(
         ({ name, metadata: { md5Hash, size } }) =>
-          `${md5Hash} ${numeral(parseInt(size, 10), 14)} ${name}`,
+          `<tr>
+          <td>${name}</td>
+          <td align="right">${fmtNum(size)}</td>
+          <td><code>${md5Hash}</code></td>
+          </tr>`,
       )
       .join('\n')}
-    </textarea>`,
+    </tbody>
+    </table>
+    </div>
+    `,
 
   /** @param { Record<string, string> } fields */
   hiddenFields: fields =>
@@ -168,9 +181,6 @@ ${Site.welcome(member)}
       method="post" enctype="multipart/form-data">
       <fieldset><legend>slogfile</legend>
 
-  You can check this list to see if your file arrived:</p>
-  ${Site.fileList(files)}
-
 	<div>
   <em>storage key:</em> <code>${policy.fields.key}</code>
   <p>
@@ -187,8 +197,10 @@ ${Site.welcome(member)}
   </fieldset>
 </form>
 
+${Site.fileList(files)}
+
 <h2>Load Generator Key</h1>
-<p>See: <a href='${Site.loadGenKeyPath}'>load generator key</a>.</p>
+<p>See: <a href='${Site.path.loadGenKey}'>load generator key</a>.</p>
 `,
 });
 
@@ -208,7 +220,10 @@ function makeTestnetParticipant(member, bucket, objectStore, loadGenAdmin) {
     member,
     user: member.user,
 
-    allFiles: () => objectStore.bucket(bucket).getFiles(),
+    myFiles: async () => {
+      const [files] = await objectStore.bucket(bucket).getFiles();
+      return files.filter(f => f.name.includes(userID));
+    },
 
     /**
      * @param { Date } freshTime
@@ -368,7 +383,7 @@ async function main(env, { clock, get, express, makeStorage, admin }) {
     {
       clientID: config`DISCORD_CLIENT_ID`,
       clientSecret: config`DISCORD_CLIENT_SECRET`,
-      callbackURL: Site.callbackPath,
+      callbackURL: Site.path.callback,
       scope: ['identify', 'email'],
     },
     {
@@ -381,17 +396,17 @@ async function main(env, { clock, get, express, makeStorage, admin }) {
 
   // OAuth 2 flow
   const { aPassport, loginHandler, callbackHandler } = bot.passport(
-    Site.badLoginPath,
+    Site.path.badLogin,
   );
   app.use(aPassport.initialize());
   app.use(aPassport.session());
-  app.get(Site.loginPath, loginHandler);
+  app.get(Site.path.login, loginHandler);
   app.get(
-    Site.callbackPath,
+    Site.path.callback,
     callbackHandler,
-    (_req, res) => res.redirect(Site.uploadSlogPath), // Successful auth
+    (_req, res) => res.redirect(Site.path.uploadSlog), // Successful auth
   );
-  app.get(Site.badLoginPath, (_r, res) => res.send(Site.badLogin()));
+  app.get(Site.path.badLogin, (_r, res) => res.send(Site.badLogin()));
 
   const loginCheck = (req, res, next) =>
     req.isAuthenticated() ? next() : res.send(Site.badLogin());
@@ -405,7 +420,7 @@ async function main(env, { clock, get, express, makeStorage, admin }) {
   };
   // Upload form
   // Note the actual upload request goes directly to Google Cloud Storage.
-  app.get(Site.uploadSlogPath, loginCheck, async (req, res) => {
+  app.get(Site.path.uploadSlog, loginCheck, async (req, res) => {
     try {
       const participant =
         /** @type { ReturnType<typeof makeTestnetParticipant> } */ (req.user);
@@ -413,31 +428,21 @@ async function main(env, { clock, get, express, makeStorage, admin }) {
         new Date(clock()),
         Site.uploadSuccessURL(base),
       );
-      const [files] = await participant.allFiles();
+      const files = await participant.myFiles();
       const page = Site.uploadSlog(participant.member, policy, files);
       res.send(page);
     } catch (err) {
       handleError(res, req.baseUrl, err);
     }
   });
-  app.get(Site.uploadSuccessPath, loginCheck, async (req, res) => {
+  app.get(Site.path.uploadSuccess, loginCheck, async (req, res) => {
     const participant =
       /** @type { ReturnType<typeof makeTestnetParticipant> } */ (req.user);
-    const [files] = await participant.allFiles();
-    res.send(
-      JSON.stringify(
-        files.map(f => ({
-          name: f.name,
-          hash: f.metadata.md5Hash,
-          size: f.metadata.size,
-        })),
-        null,
-        2,
-      ),
-    );
+    const files = await participant.myFiles();
+    res.send(Site.fileList(files));
   });
 
-  app.get(Site.loadGenKeyPath, loginCheck, async (req, res) => {
+  app.get(Site.path.loadGenKey, loginCheck, async (req, res) => {
     try {
       const participant =
         /** @type { ReturnType<typeof makeTestnetParticipant> } */ (req.user);
