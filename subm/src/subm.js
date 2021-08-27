@@ -39,8 +39,12 @@ const AgoricStyle = freeze({
   ><img alt="Agoric" align="bottom"
      src="https://agoric.com/wp-content/themes/agoric_2021_theme/assets/img/logo.svg"
       /></a> &middot; <a href="https://validate.agoric.com/">Incentivized Testnet</a>
-  </nav>
+  <br />
   <hr />
+  <address>
+  <a href="https://github.com/Agoric/testnet-notes/tree/main/subm">source code and issues on github</a>
+  </address>
+  </nav>
   `,
 });
 
