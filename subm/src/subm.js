@@ -63,8 +63,17 @@ const Site = freeze({
     uploadSuccess: '/participant/slogOK',
     loadGenKey: '/participant/loadGenKey',
   },
-  /** @param { string } base */
-  uploadSuccessURL: base => `${new URL(Site.path.uploadSuccess, base)}`,
+  /**
+   * @param { string } base
+   * @param { string } protocol
+   * @param { string } host
+   * @returns
+   */
+  uploadSuccessURL: (base, protocol, host) =>
+    `${new URL(
+      Site.path.uploadSuccess,
+      host === 'localhost' ? base : `${protocol}://${host}`,
+    )}`,
 
   /**
    * @param {string | undefined} project
@@ -426,7 +435,7 @@ async function main(env, { clock, get, express, makeStorage, admin }) {
         /** @type { ReturnType<typeof makeTestnetParticipant> } */ (req.user);
       const policy = await participant.uploadPolicy(
         new Date(clock()),
-        Site.uploadSuccessURL(base),
+        Site.uploadSuccessURL(base, req.protocol, req.hostname),
       );
       const files = await participant.myFiles();
       const page = Site.uploadSlog(participant.member, policy, files);
