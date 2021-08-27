@@ -12,13 +12,16 @@
 const discord = require('passport-discord'); // please excuse CJS
 const session = require('express-session');
 const passport = require('passport'); // Our usage is pure; we ignore the default singleton.
-const gcs = require('gcs-signed-urls'); // we use only pure parts
 
 const { DiscordAPI, avatar } = require('./discordGuild.js');
 /** @typedef { import('./discordGuild.js').GuildMember } GuildMember */
 const { makeFirebaseAdmin, getFirebaseConfig } = require('./firebaseTool.js');
+const { generateV4SignedPolicy } = require('./objStore.js');
 
-const { freeze, keys, values } = Object; // please excuse freeze vs. harden
+const { freeze, keys, values, entries } = Object; // please excuse freeze vs. harden
+
+/** @type {(digits: string) => string} */
+const fmtNum = digits => parseInt(digits, 10).toLocaleString();
 
 const AgoricStyle = freeze({
   top: `
@@ -30,6 +33,9 @@ const AgoricStyle = freeze({
     .avatar {
       border-radius: 10%; padding: 5x; border 1px solid #ddd;
     }
+    table {
+      border-collapse: collapse;
+    }
   </style>
   </head>
 
@@ -39,17 +45,35 @@ const AgoricStyle = freeze({
   ><img alt="Agoric" align="bottom"
      src="https://agoric.com/wp-content/themes/agoric_2021_theme/assets/img/logo.svg"
       /></a> &middot; <a href="https://validate.agoric.com/">Incentivized Testnet</a>
-  </nav>
+  <br />
   <hr />
+  <address>
+  <a href="https://github.com/Agoric/testnet-notes/tree/main/subm">source code and issues on github</a>
+  </address>
+  </nav>
   `,
 });
 
 const Site = freeze({
-  loginPath: '/auth/discord',
-  callbackPath: '/auth/discord/callback',
-  badLoginPath: '/loginRefused',
-  uploadSlogPath: '/participant/slogForm',
-  loadGenKeyPath: '/participant/loadGenKey',
+  path: {
+    login: '/auth/discord',
+    callback: '/auth/discord/callback',
+    badLogin: '/loginRefused',
+    uploadSlog: '/participant/slogForm',
+    uploadSuccess: '/participant/slogOK',
+    loadGenKey: '/participant/loadGenKey',
+  },
+  /**
+   * @param { string } base
+   * @param { string } protocol
+   * @param { string } host
+   * @returns
+   */
+  uploadSuccessURL: (base, protocol, host) =>
+    `${new URL(
+      Site.path.uploadSuccess,
+      host === 'localhost' ? base : `${protocol}://${host}`,
+    )}`,
 
   /**
    * @param {string | undefined} project
@@ -114,54 +138,121 @@ const Site = freeze({
     </textarea>
       `,
 
+  /** @param { FileInfo[] } files */
+  fileList: files => `
+    <div><h3>Your Existing Files</h3>
+    <table border>
+    <thead><tr><th>Name</th><th>Size</th><th>md5Hash</th></tr></thead>
+    <tbody>
+    ${files
+      .sort((a, b) => (a.name < b.name ? -1 : 1))
+      .map(
+        ({ name, metadata: { md5Hash, size } }) =>
+          `<tr>
+          <td>${name}</td>
+          <td align="right">${fmtNum(size)}</td>
+          <td><code>${md5Hash}</code></td>
+          </tr>`,
+      )
+      .join('\n')}
+    </tbody>
+    </table>
+    </div>
+    `,
+
+  /** @param { Record<string, string> } fields */
+  hiddenFields: fields =>
+    entries(fields)
+      .map(
+        ([name, value]) =>
+          `  <input name='${name}' value='${value}' type='hidden'/>`,
+      )
+      .join('\n'),
+
   /**
    * Construct slogfile upload form.
    *
    * WARNING: caller is responsible to see that values are html-injection-safe
    *
    * @param { GuildMember } member
-   * @param {{
-   *  GoogleAccessId: string,
-   *  key: string,
-   *  bucket: string,
-   *  policy: string,
-   *  signature: string,
-   * } & Record<string, string> } info
+   * @param { import('@google-cloud/storage').SignedPostPolicyV4Output } policy
+   * @param { FileInfo[] } files
+   * @typedef {{ name: string, metadata: { size: string, md5Hash: string }}} FileInfo
    */
-  uploadSlog: (
-    member,
-    { GoogleAccessId, key, bucket, policy, signature, ...headers },
-  ) => `
+  uploadSlog: (member, policy, files) => `
 ${AgoricStyle.top}
 
 <h1>Testnet Admin</h1>
 
 ${Site.welcome(member)}
 
-<form action="https://${bucket}.storage.googleapis.com"
+<form action="${policy.url}"
       method="post" enctype="multipart/form-data">
       <fieldset><legend>slogfile</legend>
-	<input type="hidden" name="bucket" value="${bucket}">
-	<label><em>storage key:</em> <input type="text" readonly name="key" value="${key}" /></label>
-	<input type="hidden" name="GoogleAccessId" value="${GoogleAccessId}">
-	<input type="hidden" name="policy" value="${policy}">
-	<input type="hidden" name="signature" value="${signature}">
-  <input type="hidden" name="Content-Type" value="${headers['Content-Type']}">
-  <input type="hidden" name="Content-Disposition"
-         value="${headers['Content-Disposition']}">
+
+	<div>
+  <em>storage key:</em> <code>${policy.fields.key}</code>
+  <p>
+  <strong>NOTE:</strong> if you get an <code>Access denied. ... does not have storage.objects.delete access ...</code>
+  error, your storage key has already been used. Reload the page to get a new one.
+  </p>
+  </div>
+  ${Site.hiddenFields(policy.fields)}
   <label>
     Suggested name: <code><em>moniker</em>-agorictest-<em>NN</em></code>.slog.gz</code><br />
 	  <input name="file" type="file">
     <input type="submit" value="Upload">
   </label>
-  <p><em><strong>NOTE:</strong> this page lacks feedback on when your upload finishes.</em></p>
   </fieldset>
 </form>
 
+${Site.fileList(files)}
+
 <h2>Load Generator Key</h1>
-<p>See: <a href='${Site.loadGenKeyPath}'>load generator key</a>.</p>
+<p>See: <a href='${Site.path.loadGenKey}'>load generator key</a>.</p>
 `,
 });
+
+/**
+ * @param {GuildMember} member
+ * @param { string } bucket
+ * @param { StorageT } objectStore
+ * @param { FirebaseAdmin } loadGenAdmin
+ * @typedef { ReturnType<import('./firebaseTool.js').makeFirebaseAdmin> } FirebaseAdmin
+ */
+function makeTestnetParticipant(member, bucket, objectStore, loadGenAdmin) {
+  if (!member.user) throw RangeError();
+  const { user } = member;
+  const userID = `${user.username}#${user.discriminator}`;
+
+  return freeze({
+    member,
+    user: member.user,
+
+    myFiles: async () => {
+      const [files] = await objectStore.bucket(bucket).getFiles();
+      return files.filter(f => f.name.includes(userID));
+    },
+
+    /**
+     * @param { Date } freshTime
+     * @param { string } redirect full URL
+     */
+    uploadPolicy: (freshTime, redirect) => {
+      // ISSUE: # in filename is asking for trouble
+      const fileName = `${userID}.slog.gz`;
+      const freshKey = `${freshTime.toISOString()}-${fileName}`;
+      return generateV4SignedPolicy(
+        objectStore,
+        bucket,
+        freshKey,
+        freshTime,
+        redirect,
+      );
+    },
+    loadGenKey: () => loadGenAdmin.generateCustomToken(user.id),
+  });
+}
 
 /**
  * A Discord bot has authority to endow passport sessions
@@ -170,9 +261,13 @@ ${Site.welcome(member)}
  * @param {ReturnType<ReturnType<typeof DiscordAPI>['guilds']>} guild
  * @param {Record<string, Snowflake>} authorizedRoles
  * @param {discord.StrategyOptions} opts
+ * @param { Object } powers
+ * @param { StorageT } powers.objectStore
+ * @param { string } powers.bucketName
+ * @param { FirebaseAdmin } powers.loadGenAdmin
  * @typedef {import('./discordGuild.js').Snowflake} Snowflake
  */
-function makeDiscordBot(guild, authorizedRoles, opts) {
+function makeDiscordBot(guild, authorizedRoles, opts, powers) {
   /** @param { GuildMember } mem */
   const checkParticipant = mem => {
     const roles = values(authorizedRoles).filter(r => mem.roles.includes(r));
@@ -182,6 +277,15 @@ function makeDiscordBot(guild, authorizedRoles, opts) {
     return null;
   };
 
+  /** @param { GuildMember } member */
+  const reviveMember = member =>
+    makeTestnetParticipant(
+      member,
+      powers.bucketName,
+      powers.objectStore,
+      powers.loadGenAdmin,
+    );
+
   const self = freeze({
     /** @param {string} failureRedirect */
     passport: failureRedirect => {
@@ -190,7 +294,10 @@ function makeDiscordBot(guild, authorizedRoles, opts) {
       aPassport.serializeUser((member, done) =>
         done(null, JSON.stringify(member)),
       );
-      aPassport.deserializeUser((data, done) => done(null, JSON.parse(data)));
+      // once authenticated, grant session capabilities
+      aPassport.deserializeUser((data, done) =>
+        done(null, reviveMember(JSON.parse(data))),
+      );
 
       const strategy = new discord.Strategy(
         opts,
@@ -230,33 +337,6 @@ function makeDiscordBot(guild, authorizedRoles, opts) {
 }
 
 /**
- * @param {GuildMember} member
- * @param {ReturnType<typeof import('gcs-signed-urls')>} storage
- * @param { ReturnType<import('./firebaseTool.js').makeFirebaseAdmin> } loadGenAdmin
- */
-function makeTestnetParticipant(member, storage, loadGenAdmin) {
-  if (!member.user) throw RangeError();
-  const { user } = member;
-  const userID = `${user.username}#${user.discriminator}`;
-
-  return freeze({
-    user: member.user,
-    /**
-     * @param { number } freshTime
-     */
-    slogFormData: freshTime => {
-      // ISSUE: # in filename is asking for trouble
-      const fileName = `${userID}.slog.gz`;
-      const dt = new Date(freshTime).toISOString();
-      const freshKey = `${dt}-${fileName}`;
-      return storage.uploadRequest(fileName, freshKey, true, {});
-    },
-
-    loadGenKey: () => loadGenAdmin.generateCustomToken(user.id),
-  });
-}
-
-/**
  * @param { NodeJS.ProcessEnv } env
  * @returns { TemplateTag }
  * @typedef { (parts: TemplateStringsArray, ...args: unknown[]) => string } TemplateTag
@@ -277,10 +357,12 @@ const makeConfig = env => {
  *   clock: () => number,
  *   get: typeof import('https').get,
  *   express: typeof import('express'),
+ *   makeStorage: (...args: unknown[]) => StorageT,
  *   admin: typeof import('firebase-admin')
  * }} io
+ * @typedef { import('@google-cloud/storage').Storage } StorageT
  */
-async function main(env, { clock, get, express, admin }) {
+async function main(env, { clock, get, express, makeStorage, admin }) {
   const app = express();
   app.enable('trust proxy'); // trust X-Forwarded-* headers
   app.get('/', (_req, res) => res.send(Site.start()));
@@ -292,6 +374,7 @@ async function main(env, { clock, get, express, admin }) {
 
   const config = makeConfig(env);
   app.use(
+    // @ts-ignore Argument of type 'Function' is not assignable to parameter of type 'PathParams'
     session({
       secret: config`SUBM_SESSION_SECRET`,
       resave: false,
@@ -299,75 +382,86 @@ async function main(env, { clock, get, express, admin }) {
     }),
   );
 
-  const storage = gcs(
-    config`GCS_PRIVATE_KEY`,
-    config`GOOGLE_SERVICES_EMAIL`,
-    config`GCS_STORAGE_BUCKET`,
-  );
   const discordAPI = DiscordAPI(config`DISCORD_API_TOKEN`, { get });
   const guild = discordAPI.guilds(config`DISCORD_GUILD_ID`);
-  const bot = makeDiscordBot(guild, Site.testnetRoles, {
-    clientID: config`DISCORD_CLIENT_ID`,
-    clientSecret: config`DISCORD_CLIENT_SECRET`,
-    callbackURL: Site.callbackPath,
-    scope: ['identify', 'email'],
-  });
   const loadGenAdmin = makeFirebaseAdmin(admin, getFirebaseConfig(config));
   loadGenAdmin.init();
+  const bot = makeDiscordBot(
+    guild,
+    Site.testnetRoles,
+    {
+      clientID: config`DISCORD_CLIENT_ID`,
+      clientSecret: config`DISCORD_CLIENT_SECRET`,
+      callbackURL: Site.path.callback,
+      scope: ['identify', 'email'],
+    },
+    {
+      bucketName: config`GCS_STORAGE_BUCKET`,
+      // ASSUME we are running in an environment which supports Application Default Credentials
+      objectStore: makeStorage(),
+      loadGenAdmin,
+    },
+  );
 
   // OAuth 2 flow
   const { aPassport, loginHandler, callbackHandler } = bot.passport(
-    Site.badLoginPath,
+    Site.path.badLogin,
   );
   app.use(aPassport.initialize());
   app.use(aPassport.session());
-  app.get(Site.loginPath, loginHandler);
+  app.get(Site.path.login, loginHandler);
   app.get(
-    Site.callbackPath,
+    Site.path.callback,
     callbackHandler,
-    (_req, res) => res.redirect(Site.uploadSlogPath), // Successful auth
+    (_req, res) => res.redirect(Site.path.uploadSlog), // Successful auth
   );
-  app.get(Site.badLoginPath, (_r, res) => res.send(Site.badLogin()));
+  app.get(Site.path.badLogin, (_r, res) => res.send(Site.badLogin()));
 
+  const loginCheck = (req, res, next) =>
+    req.isAuthenticated() ? next() : res.send(Site.badLogin());
+  const handleError = (res, baseUrl, err) => {
+    console.warn(baseUrl, err);
+    res.status(err.status || 500);
+    res.render('error', {
+      message: err.message,
+      error: app.get('env') === 'development' ? err : {},
+    });
+  };
   // Upload form
   // Note the actual upload request goes directly to Google Cloud Storage.
-  app.get(
-    Site.uploadSlogPath,
-    (req, res, next) =>
-      req.isAuthenticated() ? next() : res.send(Site.badLogin()),
-    (req, res) => {
-      const member = /** @type { GuildMember } */ (req.user);
-      const participant = makeTestnetParticipant(member, storage, loadGenAdmin);
-      const formData = participant.slogFormData(clock());
-      // console.log({ formData });
-      const page = Site.uploadSlog(member, formData);
+  app.get(Site.path.uploadSlog, loginCheck, async (req, res) => {
+    try {
+      const participant =
+        /** @type { ReturnType<typeof makeTestnetParticipant> } */ (req.user);
+      const policy = await participant.uploadPolicy(
+        new Date(clock()),
+        Site.uploadSuccessURL(base, req.protocol, req.hostname),
+      );
+      const files = await participant.myFiles();
+      const page = Site.uploadSlog(participant.member, policy, files);
       res.send(page);
-    },
-  );
+    } catch (err) {
+      handleError(res, req.baseUrl, err);
+    }
+  });
+  app.get(Site.path.uploadSuccess, loginCheck, async (req, res) => {
+    const participant =
+      /** @type { ReturnType<typeof makeTestnetParticipant> } */ (req.user);
+    const files = await participant.myFiles();
+    res.send(Site.fileList(files));
+  });
 
-  app.get(
-    Site.loadGenKeyPath,
-    (req, res, next) =>
-      req.isAuthenticated() ? next() : res.send(Site.badLogin()),
-    async (req, res) => {
-      try {
-        const member = /** @type { GuildMember } */ (req.user);
-        const participant = makeTestnetParticipant(
-          member,
-          storage,
-          loadGenAdmin,
-        );
-        const token = await participant.loadGenKey();
-        res.send(Site.loadGenKey(member, token));
-      } catch (err) {
-        res.status(err.status || 500);
-        res.render('error', {
-          message: err.message,
-          error: app.get('env') === 'development' ? err : {},
-        });
-      }
-    },
-  );
+  app.get(Site.path.loadGenKey, loginCheck, async (req, res) => {
+    try {
+      const participant =
+        /** @type { ReturnType<typeof makeTestnetParticipant> } */ (req.user);
+
+      const token = await participant.loadGenKey();
+      res.send(Site.loadGenKey(participant.member, token));
+    } catch (err) {
+      handleError(res, req.baseUrl, err);
+    }
+  });
 
   // const testerID = '358096357862408195';
   // const tester = await guild.members(testerID);
@@ -389,6 +483,9 @@ if (require.main === module) {
       clock: () => Date.now(),
       express: require('express'),
       get: require('https').get,
+      makeStorage: (C => (...args) => new C(...args))(
+        require('@google-cloud/storage').Storage,
+      ),
       admin: require('firebase-admin'),
     },
   ).catch(err => console.error(err));

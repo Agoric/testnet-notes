@@ -4,7 +4,7 @@
  * -- https://cloud.google.com/appengine/docs/standard/nodejs/using-cloud-datastore
  *
  * Ref docs:
- * [Node\.js client library  \|  Google Cloud](https://cloud.google.com/nodejs/docs/reference/datastore/latest)
+ * [Node\.js client library \| Google Cloud](https://cloud.google.com/nodejs/docs/reference/datastore/latest)
  *
  * TODO: try
  * [Running the Datastore Emulator](https://cloud.google.com/datastore/docs/tools/datastore-emulator)
