@@ -17,6 +17,7 @@ const gcs = require('gcs-signed-urls'); // we use only pure parts
 const { DiscordAPI, avatar } = require('./discordGuild.js');
 /** @typedef { import('./discordGuild.js').GuildMember } GuildMember */
 const { makeFirebaseAdmin, getFirebaseConfig } = require('./firebaseTool.js');
+const { generateV4SignedPolicy, uploadForm } = require('./objStore.js');
 
 const { freeze, keys, values } = Object; // please excuse freeze vs. harden
 
@@ -122,6 +123,19 @@ const Site = freeze({
     </textarea>
       `,
 
+  /** @param { FileInfo[] } files */
+  fileList: files => `
+    <textarea readonly rows=8 cols=100
+    >md5Hash                      size       name
+    \n${files
+      .sort((a, b) => (a.name < b.name ? -1 : 1))
+      .map(
+        ({ name, metadata: { md5Hash, size } }) =>
+          `${md5Hash} ${numeral(parseInt(size, 10), 14)} ${name}`,
+      )
+      .join('\n')}
+    </textarea>`,
+
   /**
    * Construct slogfile upload form.
    *
@@ -135,11 +149,14 @@ const Site = freeze({
    *  policy: string,
    *  signature: string,
    * } & Record<string, string> } info
-   * @param { { name: string}[] } files
+   * @param { unknown } fd
+   * @param { FileInfo[] } files
+   * @typedef {{ name: string, metadata: { size: string, md5Hash: string }}} FileInfo
    */
   uploadSlog: (
     member,
     { GoogleAccessId, key, bucket, policy, signature, ...headers },
+    fd,
     files,
   ) => `
 ${AgoricStyle.top}
@@ -148,6 +165,10 @@ ${AgoricStyle.top}
 
 ${Site.welcome(member)}
 
+<hr />
+${uploadForm(fd)}
+<hr />
+
 <form action="https://${bucket}.storage.googleapis.com"
       method="post" enctype="multipart/form-data">
       <fieldset><legend>slogfile</legend>
@@ -155,16 +176,8 @@ ${Site.welcome(member)}
   <p><em><strong>NOTE:</strong> this form lacks feedback on when your upload finishes.</em><br />
 
   You can check this list to see if your file arrived:</p>
-  <textarea readonly rows=8 cols=100>
-md5Hash                      size       name
-${files
-  .sort((a, b) => (a.name < b.name ? -1 : 1))
-  .map(
-    ({ name, metadata: { md5Hash, size } }) =>
-      `${md5Hash} ${numeral(size | 0, 14)} ${name}`,
-  )
-  .join('\n')}
-  </textarea>
+  ${Site.fileList(files)}
+
   <input type="hidden" name="bucket" value="${bucket}">
 	<label><em>storage key:</em> <input type="text" readonly name="key" value="${key}" />
   <br />
@@ -258,19 +271,25 @@ function makeDiscordBot(guild, authorizedRoles, opts) {
 
 /**
  * @param {GuildMember} member
+ * @param { string } bucket
+ * @param { StorageT } objectStore
  * @param {ReturnType<typeof import('gcs-signed-urls')>} storage
  * @param { ReturnType<import('./firebaseTool.js').makeFirebaseAdmin> } loadGenAdmin
  */
-function makeTestnetParticipant(member, storage, loadGenAdmin) {
+function makeTestnetParticipant(
+  member,
+  bucket,
+  objectStore,
+  storage,
+  loadGenAdmin,
+) {
   if (!member.user) throw RangeError();
   const { user } = member;
   const userID = `${user.username}#${user.discriminator}`;
 
   return freeze({
     user: member.user,
-    /**
-     * @param { number } freshTime
-     */
+    /** @param { number } freshTime */
     slogFormData: freshTime => {
       // ISSUE: # in filename is asking for trouble
       const fileName = `${userID}.slog.gz`;
@@ -279,6 +298,15 @@ function makeTestnetParticipant(member, storage, loadGenAdmin) {
       return storage.uploadRequest(fileName, freshKey, true, {});
     },
 
+    /** @param { Date } freshTime */
+    formFields: freshTime => {
+      // ISSUE: # in filename is asking for trouble
+      const fileName = `${userID}.slog.gz`;
+      const freshKey = `${freshTime.toISOString()}-${fileName}`;
+      return generateV4SignedPolicy(bucket, freshKey, freshTime, {
+        storage: objectStore,
+      });
+    },
     loadGenKey: () => loadGenAdmin.generateCustomToken(user.id),
   });
 }
@@ -304,11 +332,12 @@ const makeConfig = env => {
  *   clock: () => number,
  *   get: typeof import('https').get,
  *   express: typeof import('express'),
- *   Storage: typeof import('@google-cloud/storage').Storage,
+ *   makeStorage: (...args: unknown[]) => StorageT,
  *   admin: typeof import('firebase-admin')
  * }} io
+ * @typedef { import('@google-cloud/storage').Storage } StorageT
  */
-async function main(env, { clock, get, express, Storage, admin }) {
+async function main(env, { clock, get, express, makeStorage, admin }) {
   const app = express();
   app.enable('trust proxy'); // trust X-Forwarded-* headers
   app.get('/', (_req, res) => res.send(Site.start()));
@@ -327,7 +356,7 @@ async function main(env, { clock, get, express, Storage, admin }) {
     }),
   );
 
-  const cloudStore = new Storage();
+  const cloudStore = makeStorage();
 
   const storage = gcs(
     config`GCS_PRIVATE_KEY`,
@@ -370,15 +399,18 @@ async function main(env, { clock, get, express, Storage, admin }) {
         const member = /** @type { GuildMember } */ (req.user);
         const participant = makeTestnetParticipant(
           member,
+          config`GCS_STORAGE_BUCKET`,
+          cloudStore,
           storage,
           loadGenAdmin,
         );
         const formData = participant.slogFormData(clock());
+        const fd = await participant.formFields(new Date(clock()));
         // console.log({ formData });
         const [files] = await cloudStore
           .bucket(config`GCS_STORAGE_BUCKET`)
           .getFiles();
-        const page = Site.uploadSlog(member, formData, files);
+        const page = Site.uploadSlog(member, formData, fd, files);
         res.send(page);
       } catch (err) {
         res.status(err.status || 500);
@@ -399,6 +431,8 @@ async function main(env, { clock, get, express, Storage, admin }) {
         const member = /** @type { GuildMember } */ (req.user);
         const participant = makeTestnetParticipant(
           member,
+          config`GCS_STORAGE_BUCKET`,
+          cloudStore,
           storage,
           loadGenAdmin,
         );
@@ -434,7 +468,9 @@ if (require.main === module) {
       clock: () => Date.now(),
       express: require('express'),
       get: require('https').get,
-      Storage: require('@google-cloud/storage').Storage,
+      makeStorage: (C => (...args) => new C(...args))(
+        require('@google-cloud/storage').Storage,
+      ),
       admin: require('firebase-admin'),
     },
   ).catch(err => console.error(err));
