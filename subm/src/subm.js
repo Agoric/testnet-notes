@@ -12,7 +12,6 @@
 const discord = require('passport-discord'); // please excuse CJS
 const session = require('express-session');
 const passport = require('passport'); // Our usage is pure; we ignore the default singleton.
-const gcs = require('gcs-signed-urls'); // we use only pure parts
 
 const { DiscordAPI, avatar } = require('./discordGuild.js');
 /** @typedef { import('./discordGuild.js').GuildMember } GuildMember */
