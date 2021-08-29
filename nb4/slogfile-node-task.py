@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ---
 # jupyter:
 #   jupytext:
@@ -13,6 +14,13 @@
 # ---
 
 # # Associating Slogfiles with Nodes, Tasks
+#
+#  - [ ] [Mismatch: Slogfile Tasks](#Mismatch:-Slogfile-Tasks)
+#  - [ ] [Mismatch: Files](#Mismatch:-Files)
+#  - [ ] [Mismatch: monikers](#Mismatch:-monikers)
+#  - [ ] [Mismatch: gentx tasks](#Mismatch:-gentx-tasks)
+#  - [ ] [Mismatch: Validators](#Mismatch:-Validators)
+#
 
 # ### Preface: PyData tools
 
@@ -61,7 +69,7 @@ sf5 = sf5.set_index('filename').sort_index()
 sf5 = sf5.assign(modified=pd.to_datetime(sf5.modified),
                  fresh=pd.to_datetime(sf5.fresh))
 print(sf5.dtypes)
-sf5.drop(columns=['path']).sort_values('discordID')
+sf5.drop(columns=['path']).sort_values('size')
 # -
 
 # ### Duplicate, empty uploads
@@ -81,13 +89,10 @@ def _cli(bin):
     return CLI(bin, run, Popen)
 
 gsutil = _cli('gsutil')
+
+# +
+# gsutil.run('mv', *sfold.path, 'gs://slogfile-upload-5/dup-test/');
 # -
-
-sfold.path[0]
-
-gsutil.run('rm', sfold.path[0])
-
-gsutil.run('mv', *sfold.path[1:], 'gs://slogfile-upload-5/dup-test/');
 
 # ## Connecting Slogfiles with Task Submissions
 
@@ -106,14 +111,122 @@ def move_col(df, col, pos):
     df.insert(pos, col, x)
     return df
 
-x = sf5match.Verified
-sf5match.drop(columns=['Verified']).insert(2, 'Verified', x).head()
+sf5match = move_col(sf5match, 'Verified', 1)
+sf5match.head()
 # -
 
 sf5match.groupby('Verified')[['Discord ID']].aggregate('nunique')
+
+# ### Mismatch: Slogfile Tasks
+#
+# with no matching file
 
 sf5match[sf5match.Verified != 'Accepted']
 
 # !mkdir -p portal-review
 
 sf5match.to_csv('portal-review/capture_submit_slog.csv')
+
+# ### Mismatch: Files
+#
+# with no matching task
+
+sf5[~sf5.discordID.isin(taskslog['Discord ID'])][['discordID']] #.reset_index(drop=True)
+
+taskslog[taskslog['Discord ID'].str.contains('moon')]
+
+
+# ## Validators
+
+# ## Blocks, Votes from the BigDipper Explorer DB
+
+# +
+# # !conda install --yes -c anaconda pymongo
+# pymongo-3.11.0
+
+# # !pip install pymongo
+
+# Successfully installed pymongo-3.12.0
+# -
+
+# See also:
+#  - [Connecting to MongoDB — Anaconda Platform 5\.5\.0 documentation](https://enterprise-docs.anaconda.com/en/latest/data-science-workflows/data/mongodb.html)
+#  - [collection – Collection level operations — PyMongo 3\.11\.4 documentation](https://pymongo.readthedocs.io/en/stable/api/pymongo/collection.html#pymongo.collection.Collection.find)
+#
+# _**Note:** we use an ssh tunnel to access the big dipper database._
+
+# +
+def _connect(url='mongodb://localhost:27017/', name='stargate-agorictest-17'):
+    import pymongo
+    client = pymongo.MongoClient(url)
+    return client.get_database(name)
+
+_db = _connect()
+# -
+
+# The bigdipper refers to validators by address but we use moniker in the portal, so let's get the correspondence:
+
+# +
+validator = pd.DataFrame.from_records(_db.validators.find())
+
+validator['moniker'] = validator.description.apply(lambda d: d['moniker'])
+validator = validator.set_index('address', drop=True)
+validator[['moniker', 'operator_address', 'delegator_address']].head()
+# -
+
+# ### Info from review of submitted gentx files
+#
+# See `gentx_clean.py` (_note: revision to include extracted moniker in the summary to appear_)
+
+# !ls -l portal-review/gentx17.csv
+
+gentx17 = pd.read_csv('portal-review/gentx17.csv', index_col=0, parse_dates=['Last Date Updated'])
+# print(gentx17.dtypes)
+gentx17.tail()
+
+# ### Mismatch: monikers
+#
+# Monker mismatches between knack portal records and submitted gentxs
+
+gentx17ok = gentx17[(gentx17.Status == 'Completed') & (~gentx17.jsonErr)]
+gentx17ok[gentx17ok.Moniker != gentx17ok.moniker]
+
+# ## `gentx` Tasks
+
+taskgen = tasksub[tasksub.Task == 'Create and submit gentx - Metering '][['TaskBoardID', 'Discord ID', 'Verified', 'Task', 'Status', 'Last Date Updated']]
+taskgen.tail()
+
+taskgen[~taskgen.TaskBoardID.isin(gentx17.TaskBoardID)]
+
+# +
+# pd.merge(taskgen, gentx17, on='Discord ID', how='outer')
+# -
+
+taskgen[~taskgen.TaskBoardID.isin(gentx17.TaskBoardID)]
+
+# ## Matching `gentx`s Validators
+#
+# matching `gentx` task submissions with validators from the Explorer
+
+genval = pd.merge(gentx17, validator, on='moniker', how='outer')
+# print(x.dtypes)
+genval[~genval.status.isnull() & ~genval.TaskBoardID.isnull()][['TaskBoardID', 'Discord ID', 'moniker', 'accpub', 'delegator_address', 'status', 'tokens']]
+
+# ### Mismatch: gentx tasks
+#
+# Submissions with no matching validator from the explorer:
+
+genval[genval.status.isnull()][['TaskBoardID', 'Discord ID', 'moniker', 'accpub', 'delegator_address', 'status', 'tokens']]
+
+# ### Mismatch: Validators
+#
+# with no matching Task Submission
+
+genval[genval.TaskBoardID.isnull()][['TaskBoardID', 'Discord ID', 'moniker', 'accpub', 'delegator_address', 'status', 'tokens']]
+
+# ## A Canonical Slogfile
+
+sf0 = sf5[sf5['size'] == sf5['size'].max()].rename(columns=dict(discordID='Discord ID'))
+sf0.drop(columns=['path'])
+
+pd.merge(sf0.reset_index(), genval[['Discord ID', 'moniker', 'delegator_address']]).drop(columns=['path'])
