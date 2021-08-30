@@ -262,30 +262,61 @@ taskgen[~taskgen.TaskBoardID.isin(gentx17.TaskBoardID)]
 #
 # matching `gentx` task submissions with validators from the Explorer
 
-genval = pd.merge(gentx17, validator, on='moniker', how='outer')
+genval = pd.merge(gentx17, validator.reset_index(), on='moniker', how='outer')
 # print(x.dtypes)
-genval[~genval.status.isnull() & ~genval.TaskBoardID.isnull()][['TaskBoardID', 'Discord ID', 'moniker', 'accpub', 'delegator_address', 'status', 'tokens']]
+genval[~genval.status.isnull() & ~genval.TaskBoardID.isnull()][['TaskBoardID', 'Discord ID', 'moniker', 'address', 'delegator_address', 'status', 'tokens']]
 
 # +
 import numpy as np
 
-genvalc = genval[['TaskBoardID', 'Discord ID', 'Status', 'moniker', 'accpub', 'delegator_address', 'status', 'tokens']]
-genvalc = genvalc[genvalc.Status != 'Obsolete']
-genvalc.insert(3, 'Verified', np.where(~genvalc.accpub.isnull(), 'Accepted', 'in review'))
+genvalc = genval[['TaskBoardID', 'Discord ID', 'Status', 'moniker', 'address', 'delegator_address', 'status', 'tokens']]
+genvalc.insert(3, 'Verified', np.where(~genvalc.address.isnull() & (genvalc.Status != 'Obsolete'), 'Accepted', 'in review'))
 doc45.df_to_sheet(genvalc.reset_index(drop=True), index=False, sheet='gentx Tasks and Validators', start='A1', replace=True)
+
+# +
+from google.cloud import bigquery
+
+# Construct a BigQuery client object.
+client = bigquery.Client()
+
+
 # -
+
+def df_to_bq(df, file_path, table_id):
+    type_map=dict(O='STRING', i='INT64', M='TIMESTAMP', f='FLOAT64', b='BOOLEAN')
+    schema = [
+        bigquery.SchemaField(name, type_map[df[name].dtype.kind])
+        for name in df.columns
+    ]
+    job_config = bigquery.LoadJobConfig(schema=schema, skip_leading_rows=1)
+    df.to_csv(file_path, index=False)
+    with open(file_path, 'rb') as source_file:
+        load_job = client.load_table_from_file(
+            source_file, table_id, job_config=job_config
+        )
+
+    load_job.result()  # Waits for the job to complete.
+
+    destination_table = client.get_table(table_id)  # Make an API request.
+    return destination_table
+
+
+# %%bigquery
+drop table if exists slog45.genval
+
+df_to_bq(genvalc.rename(columns={'Discord ID': 'discordID', 'status': 'status_exp'}), 'portal-review/genval.csv.gz', 'slog45.genval')
 
 # ### Mismatch: gentx tasks
 #
 # Submissions with no matching validator from the explorer:
 
-genval[genval.status.isnull()][['TaskBoardID', 'Discord ID', 'moniker', 'accpub', 'delegator_address', 'status', 'tokens']]
+genval[genval.status.isnull()][['TaskBoardID', 'Discord ID', 'moniker', 'address', 'delegator_address', 'status', 'tokens']]
 
 # ### Mismatch: Validators
 #
 # with no matching Task Submission
 
-genval[genval.TaskBoardID.isnull()][['TaskBoardID', 'Discord ID', 'moniker', 'accpub', 'delegator_address', 'status', 'tokens']]
+genval[genval.TaskBoardID.isnull()][['TaskBoardID', 'Discord ID', 'moniker', 'address', 'delegator_address', 'status', 'tokens']]
 
 # ## A Canonical Slogfile
 
