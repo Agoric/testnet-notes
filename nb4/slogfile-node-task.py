@@ -170,14 +170,7 @@ sf5match.head()
 
 sf5match.groupby('Verified')[['Discord ID']].aggregate('nunique')
 
-# +
-doc45 = gc.open("Phase 4.5 Analysis")
-
-def df_to_sheet(wks, df):
-    return wks.update([df.columns.values.tolist()] + df.values.tolist())
-
-df_to_sheet(doc45.get_worksheet_by_id(336931756), sf5match)
-# -
+doc45.df_to_sheet(sf5match.reset_index(), index=False, sheet='Slogfile Tasks and Files', start='A1', replace=True)
 
 # ### Mismatch: Slogfile Tasks
 #
@@ -193,9 +186,10 @@ sf5match.to_csv('portal-review/capture_submit_slog.csv')
 #
 # with no matching task
 
-sf5[~sf5.discordID.isin(taskslog['Discord ID'])][['discordID']] #.reset_index(drop=True)
+sf5_notask = sf5[~sf5.discordID.isin(taskslog['Discord ID'])][['discordID']] #.reset_index(drop=True)
+sf5_notask
 
-taskslog[taskslog['Discord ID'].str.contains('moon')]
+doc45.df_to_sheet(sf5_notask.reset_index(), index=False, sheet='Slogfiles unmatched', start='A1', replace=True)
 
 
 # ## Validators
@@ -264,8 +258,6 @@ taskgen[~taskgen.TaskBoardID.isin(gentx17.TaskBoardID)]
 # pd.merge(taskgen, gentx17, on='Discord ID', how='outer')
 # -
 
-taskgen[~taskgen.TaskBoardID.isin(gentx17.TaskBoardID)]
-
 # ## Matching `gentx`s Validators
 #
 # matching `gentx` task submissions with validators from the Explorer
@@ -273,6 +265,14 @@ taskgen[~taskgen.TaskBoardID.isin(gentx17.TaskBoardID)]
 genval = pd.merge(gentx17, validator, on='moniker', how='outer')
 # print(x.dtypes)
 genval[~genval.status.isnull() & ~genval.TaskBoardID.isnull()][['TaskBoardID', 'Discord ID', 'moniker', 'accpub', 'delegator_address', 'status', 'tokens']]
+
+# +
+import numpy as np
+
+genvalc = genval[['TaskBoardID', 'Discord ID', 'Status', 'moniker', 'accpub', 'delegator_address', 'status', 'tokens']]
+genvalc.insert(3, 'Verified', np.where((genvalc.Status == 'Completed') & ~genvalc.accpub.isnull(), 'Accepted', 'in review'))
+doc45.df_to_sheet(genvalc.reset_index(drop=True), index=False, sheet='gentx Tasks and Validators', start='A1', replace=True)
+# -
 
 # ### Mismatch: gentx tasks
 #
