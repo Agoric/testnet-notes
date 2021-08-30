@@ -163,22 +163,7 @@ bknval.loc[20000:22000].set_index('time')[['val_qty']].plot(figsize=(12, 6));
 # +
 # %%bigquery uptime
 
-with denom as (
-  select count(distinct height) bk_qty, min(time) time_lo, max(time) time_hi
-  from slog45.bkexp
-  where time < '2021-08-27' -- Thu, Aug 26 7pm PT
-),
-num as (
-    select validator, count(distinct sig.height) sigs
-    from slog45.bksig sig
-    join slog45.bkexp bk on bk.height = sig.height
-    where bk.time < '2021-08-27'
-    group by validator
-)
-select v.moniker, num.*, denom.bk_qty, time_lo, time_hi, round(num.sigs / denom.bk_qty * 100, 3) uptime
-from num
-join slog45.valexp v on v.address=num.validator
-cross join denom
+select * from slog45.uptime
 # -
 
 df = uptime.set_index('moniker').sort_values('uptime', ascending=False)
@@ -232,3 +217,86 @@ import numpy as np
 v1['up'] = np.where(v1.ok, 1, 0)
 
 v1[v1.time < '2021-08-27'].set_index('time')[['up']].plot(style='.', alpha=0.2, figsize=(12, 4));
+
+# ## Genesis, Uptime Tasks
+
+tasksub = pd.read_csv('portal-export/submittedtasks.csv',
+                      parse_dates=['Last Date Updated'])
+tasksub.dtypes
+
+# avoid
+# BadRequest: 400 POST https://bigquery.googleapis.com/upload/bigquery/v2/projects/zinc-union-242321/jobs?uploadType=resumable:
+# Invalid field name "Discord ID". Fields must contain only letters, numbers, and underscores, start with a letter or underscore, and be at most 300 characters long.
+tasksubt = tasksub.rename(columns={
+    'Discord ID': 'discordID',
+    'Submission Link': 'submission',
+    'Task Type': 'taskType',
+    'Last Date Updated': 'updated',
+})
+tasksubt.dtypes
+
+destination_table = df_to_bq(
+    tasksubt,
+    'explorer-export/tmp.csv.gz',
+    'slog45.submittedtasks')
+print("Loaded {} rows.".format(destination_table.num_rows))
+
+# +
+# %%bigquery
+
+select count(*) count, max(updated) updated_hi
+from slog45.submittedtasks
+where updated >= '2021-08-15'
+
+# +
+# %%bigquery
+
+select count(*) count
+from slog45.submittedtasks t
+where t.updated >= '2021-08-15'
+and t.Task = 'Start your validator as part of the genesis ceremony '
+
+# +
+# %%bigquery task_start_genesis
+
+select t.TaskBoardID, t.discordID, t.Status, t.Verified, gv.moniker, gv.address, gv.delegator_address, sig.height_lo, bk.time
+from slog45.submittedtasks t
+full outer join slog45.genval gv on gv.discordID = t.discordID
+left join (
+    select validator, min(height) height_lo
+    from slog45.bksig sig
+    group by validator
+) sig on sig.validator = gv.address
+left join slog45.bkexp bk on bk.height = sig.height_lo
+where t.updated >= '2021-08-15'
+and t.Task = 'Start your validator as part of the genesis ceremony '
+# -
+
+task_start_genesis.sort_values('height_lo').reset_index()[['height_lo']].plot();
+
+task_start_genesis.sort_values('time').reset_index()[['time']].plot()
+
+byt = task_start_genesis.groupby('height_lo')[['time']].min()
+byt.head(5)
+
+# +
+df = task_start_genesis[['TaskBoardID', 'moniker', 'height_lo', 'time']].sort_values('height_lo').reset_index(drop=True)
+df['unit'] = 1
+agg = df.groupby('height_lo')
+
+df = pd.concat([
+    agg[['TaskBoardID']].count(),
+    agg[['time']].min()
+], axis=1)
+df['cumsum'] = df.TaskBoardID.cumsum()
+df.head(15)
+# -
+
+df[['cumsum']].iloc[:15].plot();
+
+df.set_index('time')[['cumsum']].iloc[:15].plot();
+
+task_start_genesis.loc[task_start_genesis.height_lo <= 10, 'Verified'] = 'Approved'
+task_start_genesis.groupby('Verified')[['TaskBoardID']].count()
+
+doc45.df_to_sheet(task_start_genesis, sheet='Start Genesis', index=False, start='A1', replace=True)
