@@ -27,18 +27,71 @@
 import pandas as pd
 dict(pandas=pd.__version__)
 
+# +
+# # !pip install gspread gspread-pandas
+# -
+
+# ### Script vs module
+
+TOP = __name__ == '__main__'
+
 # ## Task Portal Export
 #
 # Participants use the https://validateagoric.knack.com/ portal to submit their tasks for review.
 
-# !ls -l portal-export/submittedtasks.csv
+# +
+# # !ls -l portal-export/submittedtasks.csv
+# -
 
 tasksub = pd.read_csv('portal-export/submittedtasks.csv',
                       parse_dates=['Last Date Updated'])
-tasksub.tail(3)
-
 phase45start = '2021-08-15'
-tasksub[tasksub['Last Date Updated'] >= phase45start].groupby(['Event', 'Task'])[['TaskBoardID']].count()
+tasksub45 = tasksub[tasksub['Last Date Updated'] >= phase45start].copy()
+tasksub45.Event = tasksub45.Event.fillna('Metering ')
+tasksub45.set_index('TaskBoardID')[['Event', 'Task', 'Last Date Updated']].sort_values('Last Date Updated').tail(3)
+
+task_summary = tasksub45.groupby('Event')[['Last Date Updated']].agg(['count', 'min', 'max'])
+task_summary.insert(0, 'Task', [None])
+#pd.DataFrame.from_records([dict(
+#    count=len(tasksub45),
+#    min=tasksub45['Last Date Updated'].min(),
+#    max=tasksub45['Last Date Updated'].max())])
+task_summary
+
+# +
+task_breakdown = tasksub45.groupby(['Event', 'Task'])[['Last Date Updated']].agg(['count', 'min', 'max'])
+
+task_breakdown = task_breakdown.sort_values(('Last Date Updated',   'min'))
+task_breakdown
+
+# +
+import gspread
+from gspread_pandas import Spread, Client
+from pathlib import Path
+
+from google.oauth2 import service_account
+
+# from https://gspread-pandas.readthedocs.io/en/latest/gspread_pandas.html#module-gspread_pandas.client
+SCOPES = ['openid',
+          'https://www.googleapis.com/auth/drive',
+          'https://www.googleapis.com/auth/userinfo.email',
+          'https://www.googleapis.com/auth/spreadsheets']
+
+def open_workbook(id, client):
+    return Spread(id, client=client)
+
+def _the_workbook(id='1DjKQuBzHLw6slGuXumaYHBjtUEHhWcv1IP_g7-jp7_U',
+                  key='../../keys/zinc-union-242321-4d7ae06ee750.json'):
+    from pathlib import Path
+    credentials = service_account.Credentials.from_service_account_file(key, scopes=SCOPES)
+    return open_workbook(id, Client(creds=credentials))
+
+doc45 = _the_workbook()
+doc45.sheets
+# -
+
+doc45.df_to_sheet(task_summary.reset_index(), index=False, sheet='Task Summary', start='A1', replace=True)
+doc45.df_to_sheet(task_breakdown.reset_index(), index=False, sheet='Task Summary', start='A5')
 
 # ## Slogfile tasks submitted
 
@@ -116,6 +169,15 @@ sf5match.head()
 # -
 
 sf5match.groupby('Verified')[['Discord ID']].aggregate('nunique')
+
+# +
+doc45 = gc.open("Phase 4.5 Analysis")
+
+def df_to_sheet(wks, df):
+    return wks.update([df.columns.values.tolist()] + df.values.tolist())
+
+df_to_sheet(doc45.get_worksheet_by_id(336931756), sf5match)
+# -
 
 # ### Mismatch: Slogfile Tasks
 #
