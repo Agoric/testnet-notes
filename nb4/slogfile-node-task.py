@@ -270,7 +270,8 @@ genval[~genval.status.isnull() & ~genval.TaskBoardID.isnull()][['TaskBoardID', '
 import numpy as np
 
 genvalc = genval[['TaskBoardID', 'Discord ID', 'Status', 'moniker', 'accpub', 'delegator_address', 'status', 'tokens']]
-genvalc.insert(3, 'Verified', np.where((genvalc.Status == 'Completed') & ~genvalc.accpub.isnull(), 'Accepted', 'in review'))
+genvalc = genvalc[genvalc.Status != 'Obsolete']
+genvalc.insert(3, 'Verified', np.where(~genvalc.accpub.isnull(), 'Accepted', 'in review'))
 doc45.df_to_sheet(genvalc.reset_index(drop=True), index=False, sheet='gentx Tasks and Validators', start='A1', replace=True)
 # -
 
