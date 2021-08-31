@@ -175,9 +175,9 @@ select distinct uptime.uptime, t.TaskBoardID, t.Status, t.Verified, t.discordID
      , t.Moniker, uptime.moniker moniker_gtx, uptime.sigs, uptime.bk_qty, uptime.validator
      , gv.delegator_address
      , t.submission
-from t
-left join slog45.genval gv on gv.discordID = t.discordID and gv.Verified = 'Accepted'
-left join slog45.uptime on uptime.validator = gv.address
+from slog45.uptime
+left join slog45.genval gv on uptime.validator = gv.address  and gv.Verified = 'Accepted'
+full outer join t on gv.discordID = t.discordID
 # -
 
 task_uptime.TaskBoardID.nunique(), len(task_uptime)
@@ -186,7 +186,7 @@ task_uptime[~task_uptime.TaskBoardID.isnull() & task_uptime.uptime.isnull()]
 
 task_uptime.loc[task_uptime.uptime >= 50, 'Verified'] = 'Accepted'
 task_uptime.loc[task_uptime.uptime < 50, 'Verified'] = 'Not accepted'
-task_uptime.groupby('Verified')[['TaskBoardID']].count()
+task_uptime.groupby('Verified')[['TaskBoardID', 'validator']].count()
 
 doc45.df_to_sheet(task_uptime.sort_values('uptime', ascending=False),
                   sheet='Uptime', index=False, start='A1', replace=True)
