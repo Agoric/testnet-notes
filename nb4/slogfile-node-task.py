@@ -176,7 +176,7 @@ doc45.df_to_sheet(sf5match.reset_index(), index=False, sheet='Slogfile Tasks and
 #
 # with no matching file
 
-sf5match[sf5match.Verified != 'Accepted']
+sf5match[sf5match.Verified != 'Accepted'].reset_index()
 
 # !mkdir -p portal-review
 
@@ -227,12 +227,14 @@ validator = pd.DataFrame.from_records(_db.validators.find())
 
 validator['moniker'] = validator.description.apply(lambda d: d['moniker'])
 validator = validator.set_index('address', drop=True)
-validator[['moniker', 'operator_address', 'delegator_address']].head()
+validator[['operator_address', 'delegator_address']].head()
 # -
 
 # ### Info from review of submitted gentx files
 #
 # See `gentx_clean.py` (_note: revision to include extracted moniker in the summary to appear_)
+
+# !python gentx_clean.py portal-export/submittedtasks.csv gentx_files >portal-review/gentx17.csv
 
 # !ls -l portal-review/gentx17.csv
 
@@ -247,12 +249,13 @@ gentx17.tail()
 gentx17ok = gentx17[(gentx17.Status == 'Completed') & (~gentx17.jsonErr)]
 gentx17ok[gentx17ok.Moniker != gentx17ok.moniker]
 
+doc45.df_to_sheet(gentx17ok[gentx17ok.Moniker != gentx17ok.moniker], index=False,
+                  sheet='Moniker mismatches', start='A1', replace=True)
+
 # ## `gentx` Tasks
 
-taskgen = tasksub[tasksub.Task == 'Create and submit gentx - Metering '][['TaskBoardID', 'Discord ID', 'Verified', 'Task', 'Status', 'Last Date Updated']]
+taskgen = tasksub[tasksub.Task == 'Create and submit gentx - Metering '][['TaskBoardID', 'Discord ID', 'Verified', 'Status', 'Last Date Updated', 'Submission Link']]
 taskgen.tail()
-
-taskgen[~taskgen.TaskBoardID.isin(gentx17.TaskBoardID)]
 
 # +
 # pd.merge(taskgen, gentx17, on='Discord ID', how='outer')
@@ -262,16 +265,27 @@ taskgen[~taskgen.TaskBoardID.isin(gentx17.TaskBoardID)]
 #
 # matching `gentx` task submissions with validators from the Explorer
 
-genval = pd.merge(gentx17, validator.reset_index(), on='moniker', how='outer')
+genval = pd.merge(gentx17, validator.reset_index(), on='delegator_address', how='outer', suffixes=['_knack', ''])
 # print(x.dtypes)
-genval[~genval.status.isnull() & ~genval.TaskBoardID.isnull()][['TaskBoardID', 'Discord ID', 'moniker', 'address', 'delegator_address', 'status', 'tokens']]
+genval[~genval.status.isnull() & ~genval.TaskBoardID.isnull()][[
+    'TaskBoardID', 'Discord ID', 'jsonErr', 'moniker', 'address', 'delegator_address', 'status', 'tokens']]
 
 # +
 import numpy as np
 
-genvalc = genval[['TaskBoardID', 'Discord ID', 'Status', 'moniker', 'address', 'delegator_address', 'status', 'tokens']]
-genvalc.insert(3, 'Verified', np.where(~genvalc.address.isnull() & (genvalc.Status != 'Obsolete'), 'Accepted', 'in review'))
-doc45.df_to_sheet(genvalc.reset_index(drop=True), index=False, sheet='gentx Tasks and Validators', start='A1', replace=True)
+genvalc = genval[['TaskBoardID', 'Discord ID', 'Status', 'jsonErr', 'Moniker', 'address', 'delegator_address', 'status', 'tokens']].copy()
+genvalc.insert(3, 'Verified', np.where(genvalc.Status == 'Obsolete', 'Not accepted',
+                                       np.where(genvalc.address.isnull(), 'in review', 'Accepted')))
+
+# genvalc.groupby('Verified')[['TaskBoardID']].count()
+genvalc = genvalc.set_index('TaskBoardID')
+genvalc['Submission Link'] = tasksub[['TaskBoardID', 'Submission Link']].set_index('TaskBoardID')
+genvalc
+# -
+
+genvalc.reset_index().groupby('Verified')[['TaskBoardID']].count()
+
+doc45.df_to_sheet(genvalc.reset_index(), sheet='gentx Tasks and Validators', start='A1', replace=True)
 
 # +
 from google.cloud import bigquery
@@ -304,19 +318,19 @@ def df_to_bq(df, file_path, table_id):
 # %%bigquery
 drop table if exists slog45.genval
 
-df_to_bq(genvalc.rename(columns={'Discord ID': 'discordID', 'status': 'status_exp'}), 'portal-review/genval.csv.gz', 'slog45.genval')
+df_to_bq(genvalc.rename(columns={'Discord ID': 'discordID', 'status': 'status_exp', 'Submission Link': 'submission'}), 'portal-review/genval.csv.gz', 'slog45.genval')
 
 # ### Mismatch: gentx tasks
 #
 # Submissions with no matching validator from the explorer:
 
-genval[genval.status.isnull()][['TaskBoardID', 'Discord ID', 'moniker', 'address', 'delegator_address', 'status', 'tokens']]
+genval[genval.status.isnull()][['TaskBoardID', 'Discord ID', 'Moniker', 'jsonErr', 'moniker', 'address', 'delegator_address', 'status', 'tokens']].reset_index(drop=True)
 
 # ### Mismatch: Validators
 #
 # with no matching Task Submission
 
-genval[genval.TaskBoardID.isnull()][['TaskBoardID', 'Discord ID', 'moniker', 'address', 'delegator_address', 'status', 'tokens']]
+genval[genval.TaskBoardID.isnull()][['TaskBoardID', 'moniker', 'address', 'delegator_address', 'status', 'tokens']]
 
 # ## A Canonical Slogfile
 
@@ -324,3 +338,10 @@ sf0 = sf5[sf5['size'] == sf5['size'].max()].rename(columns=dict(discordID='Disco
 sf0.drop(columns=['path'])
 
 pd.merge(sf0.reset_index(), genval[['Discord ID', 'moniker', 'delegator_address']]).drop(columns=['path'])
+
+# ## Loadgen Task
+
+task_loadgen = tasksub45[tasksub45.Task == "Launch and maintain Agoric's load generator node through the entire phase"]
+task_loadgen.head(2)
+
+doc45.df_to_sheet(task_loadgen, index=False, sheet='loadgen Task', start='A1', replace=True)

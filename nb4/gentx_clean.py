@@ -11,6 +11,7 @@ import pandas as pd
 log = logging.getLogger(__name__)
 BORING = ['Verified', 'Task Type', 'Event', 'Submission Link']
 
+
 def main(argv, stdout, cwd):
     log.info('versions: %s', dict(pandas=pd.__version__))
     [portal_export, dest] = argv[1:3]
@@ -27,6 +28,8 @@ def load(path):
 
     task_export = pd.read_csv(path,
                               parse_dates=['Last Date Updated'])
+    task_export = task_export[
+        task_export.Task == 'Create and submit gentx - Metering ']
 
     # log.info('portal update: %s', task_export.dtypes)
 
@@ -35,7 +38,8 @@ def load(path):
 
     log.info('tasks:\n%s',
              tasks.drop(['Status', 'Verified', 'Task Type', 'Event',
-                         'Submission Link'], axis=1).head())
+                         'Submission Link'], axis=1).sort_values(
+                             'Last Date Updated').tail())
 
     # ## Clean up markup
     #
@@ -51,13 +55,14 @@ def mark_dups(df,
               key='Discord ID'):
     """one per participant"""
 
-    df = df.sort_values(['Discord ID', 'Last Date Updated'])
-    dupd = df[df.Status == 'Completed'].duplicated([key], keep='last')
+    df = df.sort_values([key, 'Last Date Updated'])
+    dupd = df.duplicated([key], keep='last')
     df.loc[dupd, 'Status'] = 'Obsolete'
     dups = df[df.Status == 'Obsolete'].reset_index().drop(
         BORING, axis=1)
 
-    log.warning('dropping dups by %s:\n%s', key, dups[['TaskBoardID', 'Discord ID', 'Moniker']])
+    log.warning('dropping dups by %s:\n%s', key,
+                dups[['TaskBoardID', 'Discord ID', 'Moniker']])
 
     log.info('tasks: %s',
              (dict(submissions_all=len(df), deduped=len(df) - len(dups),
@@ -82,6 +87,14 @@ def extract(tasks):
     tasks['gentx'] = nobr(tasks['Submission Link']).apply(
         lambda txt: tryjson(txt))
     tasks['jsonErr'] = tasks.gentx.apply(lambda v: isinstance(v, Exception))
+    # print(json.dumps(tasks.gentx.iloc[0], indent=2))
+    tasks['moniker'] = tasks.gentx.apply(
+        lambda v: None if isinstance(v, Exception)
+        else v['body']['messages'][0]['description']['moniker'])
+    tasks['delegator_address'] = tasks.gentx.apply(
+        lambda v: None if isinstance(v, Exception)
+        else v['body']['messages'][0]['delegator_address'])
+
     log.warning('JSON errors:\n%s',
                 tasks[['Discord ID', 'Moniker', 'jsonErr']][tasks.jsonErr])
 
@@ -120,7 +133,7 @@ def save(tasks, dest, stdout):
 
     tasks = tasks.sort_values(['Discord ID', 'Last Date Updated'])
     tasks[['Discord ID', 'Moniker', 'Status', 'jsonErr',
-           'Last Date Updated']].reset_index().to_csv(stdout)
+           'Last Date Updated', 'moniker', 'delegator_address']].reset_index().to_csv(stdout)
 
 
 def _more_checks():

@@ -5,9 +5,5 @@ JUPYTEXT=$(HOME)/.local/bin/jupytext
 	$(JUPYTEXT) --to .py $<
 
 
-all: slogfile-node-task.py block-explore-uptime.py
+all: slogfile-node-task.py block-explore-uptime.py uptime-tasks.py
 
-slogfile-node-task.py: slogfile-node-task.ipynb
-
-
-block-explore-uptime.py: block-explore-uptime.ipynb
