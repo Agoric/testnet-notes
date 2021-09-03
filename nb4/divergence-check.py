@@ -210,125 +210,38 @@ def vat_compute_viz(df, scale=1000, x='blockTS'):
 
 ax = vat_compute_viz(df.reset_index())
 ax.axvline(genesis17, color='r', linestyle='--', lw=2)
-# -
 
-# ## Blocks in Kernel Runs
-#
-# Due to replay, blocks may be recorded in more than one kernel run.
-#
-# _Note partition by hour._
 
-# +
-# %%bigquery
-
-drop table if exists slog45.block_dur;
-
-# +
-# %%bigquery
-
-drop table if exists slog45.block_dur;
-
-create table slog45.block_dur
-
-PARTITION BY
-  TIMESTAMP_TRUNC(ts_lo, hour)
-
-as
-
-with block_begin as (
-    select cast(json_value(record, '$.blockHeight') as int64) blockHeight
-         , cast(json_value(record, '$.blockTime') as int64) blockTime
-         , timestamp_micros(cast(json_value(record, '$.blockTime') as int64) * 1000000) blockTS
-         , e.ts, e.time, e.type
-         , rank() over (order by e.time) bk_num
-    from slog45.entry_t e
-    where type = 'cosmic-swingset-begin-block'
-)
-
-select kr.run_num, lo.bk_num, lo.blockHeight, lo.blockTS, hi.blockTS blockTS_hi, hi.blockTime - lo.blockTime dur
-     , lo.time time_lo, hi.time time_hi
-     , lo.ts ts_lo, hi.ts ts_hi
-from block_begin lo
-join block_begin hi
-  on hi.bk_num = lo.bk_num + 1
-join slog45.kernel_run kr on kr.time_lo < lo.time and (kr.time_hi is null or kr.time_hi > lo.time)
-;
-
-select * from slog45.block_dur order by bk_num desc limit 15;
-
-# +
-# %%bigquery
-
--- check uniqueness of run, blockHeight
-
-select run_num, blockHeight, count(*)
-from slog45.block_dur
-group by run_num, blockHeight
-having count(*) > 1
 # -
 
 # ### Consensus Block Duration
 
 # +
-# %%bigquery bkdur
+def block_dur(df):
+    df = df[df.type == 'cosmic-swingset-begin-block']
+    df = df[['blockHeight', 'blockTS']].drop_duplicates()
+    df['dur'] = df.blockTS.diff() / pd.offsets.Second(1)
+    return df
 
-select distinct blockHeight, blockTS, dur
-from slog45.block_dur
+bkdur2 = block_dur(r2b)
+
+bkdur2.describe()
 # -
 
-bkdur.head()
-
-bkdur[bkdur.dur >= 0].plot.scatter(x='blockTS', y='dur', alpha=0.3, figsize=(16, 8));
+bkdur2[bkdur2.dur >= 0].plot.scatter(x='blockTS', y='dur', alpha=0.3, figsize=(16, 8));
 
 # ## Deliveries within Blocks and Kernel Runs
 
-# ### Replay
+# ### Replay?
 
-# +
-# %%bigquery
-
-drop table if exists slog45.replay_range;
-
-create table slog45.replay_range
-as
-with lo as (
-    select ts, rank() over (order by time) as seq
-         , cast(json_value(record, '$.deliveries') as int64) deliveries
-    from slog45.entry_t
-    where type = 'start-replay'
-),
-hi as (
-    select ts, rank() over (order by time) as seq from slog45.entry_t
-    where type = 'finish-replay'
-)
-select lo.seq, lo.ts ts_lo, hi.ts ts_hi, lo.deliveries
-from lo
-join hi on hi.seq = lo.seq and hi.ts > lo.ts
-;
-
-select * from slog45.replay_range rr order by seq limit 15;
-
-# +
-# %%bigquery
-
-select count(*)
-    from slog45.replay_range
-
-# +
-# %%bigquery
-
-select seq, ts_lo, ts_hi, deliveries, cast(dur as string) dur_s from (
-    select rr.*, ts_hi - ts_lo dur
-    from slog45.replay_range rr where unix_seconds(ts_hi) - unix_seconds(ts_lo) > 10 order by seq limit 15
-)
+df = r2b[~r2b.blockHeight.isnull() & (r2b.blk_sign == 0) & (r2b.type == 'deliver')].sort_values('crankNum')
+# .loc[30:40] # .crankNum.duplicated(keep=False)
+# df.crankNum.duplicated(keep=False)
+df[df.crankNum.duplicated()]
+# df.loc[2915:2917]
 
 
-# +
-# %%bigquery
-
-with r1 as (select * from slog45.replay_range where seq = 178)
-select e.*, r1.seq from slog45.entry_t e
-join r1 on e.ts between r1.ts_lo and r1.ts_hi
+# ## @@@@@@@@@@@@@@@@@@@@@@@@@@
 
 # + active=""
 # %%bigquery
@@ -469,13 +382,16 @@ vat_compute.sort_values('compute_tot', ascending=False).head(10)
 
 len(vat_compute)
 
+# + jupyter={"outputs_hidden": true}
 df = vat_compute.assign(s=1000 * vat_compute.compute_tot / vat_compute.compute_tot.max())
 df.plot.scatter(x='blockHeight', y='vatID', s='s', figsize=(12, 6), alpha=0.3,
                 title='Computrons per Block by Vat');
 
+# + jupyter={"outputs_hidden": true}
 df = vat_compute.assign(s=1000 * vat_compute.compute_tot / vat_compute.compute_tot.max())
 df.plot.scatter(x='blockTS', y='vatID', s='s', figsize=(12, 6), alpha=0.3,
                 title='Computrons per Block by Vat');
+# -
 
 vat_compute[vat_compute.blockHeight.isin([8386, 47194])].sort_values('compute_tot', ascending=False).head(10)
 
