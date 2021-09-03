@@ -168,16 +168,24 @@ with t as (
     select t.*
     from slog45.submittedtasks t
     where t.updated >= '2021-08-15' and t.Task = 'Maintain uptime during phase!'
+),
+dev as (
+    select distinct Moniker, Developer
+    from slog45.submittedtasks
+    where updated >= '2021-08-15'
 )
-
 -- why is this distinct needed?
-select distinct uptime.uptime, t.TaskBoardID, t.Status, t.Verified, t.discordID
+select distinct uptime.uptime, t.TaskBoardID, t.Status, t.Verified
+     , coalesce(t.Developer, dev.Developer) Developer
+     , t.discordID
      , t.Moniker, uptime.moniker moniker_gtx, uptime.sigs, uptime.bk_qty, uptime.validator
      , gv.delegator_address
      , t.submission
 from slog45.uptime
 left join slog45.genval gv on uptime.validator = gv.address  and gv.Verified = 'Accepted'
+left join dev on dev.Moniker = gv.moniker
 full outer join t on gv.discordID = t.discordID
+
 # -
 
 task_uptime.TaskBoardID.nunique(), len(task_uptime)
@@ -188,7 +196,7 @@ task_uptime.loc[task_uptime.uptime >= 50, 'Verified'] = 'Accepted'
 task_uptime.loc[task_uptime.uptime < 50, 'Verified'] = 'Not accepted'
 task_uptime.groupby('Verified')[['TaskBoardID', 'validator']].count()
 
-doc45.df_to_sheet(task_uptime.sort_values('uptime', ascending=False),
+doc45.df_to_sheet(task_uptime.drop(columns=['Developer']).sort_values('uptime', ascending=False),
                   sheet='Uptime', index=False, start='A1', replace=True)
 
 # +
@@ -200,3 +208,20 @@ select * from slog45.genval
 genval[genval.Moniker == 'Va1id8']
 
 uptime[uptime.moniker == 'Va1id8']
+
+# +
+import numpy as np
+
+missing = task_uptime[
+    task_uptime.TaskBoardID.isnull() & ~task_uptime.uptime.isnull()
+][['Developer', 'moniker_gtx', 'uptime', 'validator']]
+missing['Submission Link'] = missing.moniker_gtx + ': ' + missing.uptime.astype(str) + '%'
+missing['Verified'] = np.where(missing.uptime >= 50, 'Accepted', 'not accepted')
+missing['Task'] = 'Maintain uptime during phase!'
+missing['Event'] = 'Metering'
+missing['Status'] = 'Completed'
+missing = missing.sort_values('Developer').reset_index(drop=True)
+missing
+# -
+
+missing[~missing.Developer.isnull()].drop(columns=['uptime', 'moniker_gtx']).to_csv('portal-review/uptime-missing.csv', index=False)
