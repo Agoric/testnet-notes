@@ -125,6 +125,10 @@ print(sf5.dtypes)
 sf5.drop(columns=['path']).sort_values('size')
 # -
 
+sf5.dtypes
+
+sf5.fresh.duplicated().any()
+
 # ### Duplicate, empty uploads
 #
 # These were moved to `dup-test`.
