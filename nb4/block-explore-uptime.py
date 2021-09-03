@@ -232,12 +232,25 @@ doc45.df_to_sheet(uptime_share, sheet='Uptime', index=False, start='A1', replace
 
 uptime[uptime.moniker.str.startswith('b').fillna(False)]
 
-sigs[sigs.validator == '93C1FD057D299A4128292031B8D6B43105155778'].height #.plot.scatter(x='height', y='height', alpha=0.2, figsize=(12, 12)) #[['height']].plot()
-
+# +
 import numpy as np
-v1 = blkq[['time']].copy() # .head()
-v1['ok'] = v1.index.isin(sigs[sigs.validator == '93C1FD057D299A4128292031B8D6B43105155778'].height)
-v1['up'] = np.where(v1.ok, 1, 0)
-v1.head()
 
-v1[v1.time < '2021-08-27'].set_index('time')[['up']].plot(style='.', alpha=0.2, figsize=(12, 4));
+def uptime_viz(moniker, shutdown='2021-08-27'):
+    validator = uptime[uptime.moniker == moniker].validator.iloc[0]
+    v1 = blkq[['time']].copy() # .head()
+    v1['ok'] = v1.index.isin(sigs[sigs.validator == validator].height)
+    v1['up'] = np.where(v1.ok, 1, 0)
+    df = v1[v1.time < shutdown].set_index('time')[['up']]
+    return df.plot(style='.', alpha=0.2, figsize=(12, 1), title=f'{moniker} uptime')
+
+uptime_viz('btsniik')
+
+# +
+# %%bigquery
+
+select distinct Moniker from slog45.submittedtasks
+where discordID = 'mirxl#0530'
+limit 3
+# -
+
+uptime_viz('mirxl')
