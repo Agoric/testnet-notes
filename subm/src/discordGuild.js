@@ -70,6 +70,15 @@ const query = params =>
  *   pending?: boolean,
  *   permissions?: string,
  * }} GuildMember
+ *
+ * https://discord.com/developers/docs/resources/user#user-object
+ * @typedef {{
+ *   id: Snowflake,
+ *   username: string,
+ *   discriminator: string,
+ *   avatar?: string,
+ *   email?: string, // ... etc.
+ * }} UserObject
  * @typedef { string } Snowflake 64 bit numeral
  * @typedef { string } TimeStamp ISO8601 format
  */
@@ -87,6 +96,11 @@ function DiscordAPI(token, { get }) {
   };
 
   return freeze({
+    /**
+     * @param { string } userID
+     * @returns { Promise<UserObject> }
+     */
+    users: userID => getJSON(`${api}/users/${userID}`),
     /** @param { string } guildID */
     guilds(guildID) {
       return freeze({
@@ -94,6 +108,7 @@ function DiscordAPI(token, { get }) {
         info() {
           return getJSON(`${api}/guilds/${guildID}`);
         },
+        roles: () => getJSON(`${api}/guilds/${guildID}/roles`),
         /**
          * @param { string } userID
          * @returns { Promise<GuildMember> }
@@ -119,7 +134,27 @@ const avatarBase = 'https://cdn.discordapp.com/avatars';
 
 /** @param { DiscordUser | undefined } user */
 function avatar(user) {
-  return `${avatarBase}/${user?.id}/${user?.avatar}.png`;
+  if (!user) return '/no-avatar???';
+  return `${avatarBase}/${user.id}/${user.avatar}.png`;
+}
+
+/**
+ * @param {ReturnType<ReturnType<DiscordAPI>['guilds']>} guild
+ */
+async function pagedMembers(guild) {
+  /** @type {GuildMember[][]} */
+  const pages = [];
+  const limit = 1000;
+  let after;
+  do {
+    console.error('getting page', pages.length, after);
+    // eslint-disable-next-line no-await-in-loop
+    const page = await guild.membersList({ limit, after });
+    if (!page.length) break;
+    after = page.slice(-1)[0].user.id;
+    pages.push(page);
+  } while (after);
+  return pages.flat();
 }
 
 /**
@@ -149,18 +184,10 @@ async function main(env, { stdout, get }) {
   const discordAPI = DiscordAPI(config`DISCORD_API_TOKEN`, { get });
   const guild = discordAPI.guilds(config`DISCORD_GUILD_ID`);
 
-  const pages = [];
-  const limit = 1000;
-  let after;
-  do {
-    console.error('getting page', pages.length, after);
-    // eslint-disable-next-line no-await-in-loop
-    const page = await guild.membersList({ limit, after });
-    if (!page.length) break;
-    after = page.slice(-1)[0].user.id;
-    pages.push(page);
-  } while (after);
-  const members = pages.flat();
+  const roles = await guild.roles();
+  stdout.write(JSON.stringify(roles, null, 2));
+
+  const members = await pagedMembers(guild);
   stdout.write(JSON.stringify(members, null, 2));
 }
 
