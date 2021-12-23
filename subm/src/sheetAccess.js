@@ -1,8 +1,7 @@
-const range = n => [...Array(n).keys()];
-
 /**
  * @param {GoogleSpreadsheetWorksheet} sheet
  * @param {string | number} key
+ * @throws on not found
  */
 const lookup = async (sheet, key) => {
   // load primary key column
@@ -11,14 +10,18 @@ const lookup = async (sheet, key) => {
     endColumnIndex: 1,
   });
 
-  const destIndex = range(sheet.rowCount).find(rowIndex => {
-    if (rowIndex === 0) return false; // header row
+  let rowIndex = 1;
+  for (; rowIndex < sheet.rowCount; rowIndex += 1) {
     const { value } = sheet.getCell(rowIndex, 0);
-    return key === value || value === null;
-  });
-  if (destIndex < 0) throw Error('key not found and no available rows');
-  const rows = await sheet.getRows({ offset: destIndex - 1, limit: 1 });
-  return rows.length ? rows[0] : undefined;
+    if (value === null) throw RangeError(key); // empty row: end of data
+    if (key === value) {
+      break;
+    }
+  }
+  if (rowIndex === sheet.rowCount) throw RangeError(key);
+  const [row] = await sheet.getRows({ offset: rowIndex - 1, limit: 1 });
+  if (!row) throw TypeError('should not happen');
+  return row;
 };
 
 /**
@@ -28,7 +31,12 @@ const lookup = async (sheet, key) => {
  * @typedef {import('google-spreadsheet').GoogleSpreadsheetWorksheet} GoogleSpreadsheetWorksheet
  */
 const upsert = async (sheet, key, record) => {
-  let row = await lookup(sheet, key);
+  let row;
+  try {
+    row = await lookup(sheet, key);
+  } catch (_notFound) {
+    // ignore
+  }
   if (row) {
     Object.assign(row, record);
     await row.save({ raw: true });

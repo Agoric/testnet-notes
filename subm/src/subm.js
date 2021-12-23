@@ -307,10 +307,12 @@ function makeContact(sheet, member) {
   if (!user) throw TypeError('user undefined');
   return freeze({
     member,
-    /** @returns { Promise<ContactInfo> } */
+    /**
+     * @returns { Promise<ContactInfo> }
+     * @throws on not found
+     */
     getContactInfo: async () => {
       const row = await lookup(sheet, user.id);
-      if (!row) throw RangeError(user.id);
       const {
         email,
         fullName,
