@@ -6,11 +6,10 @@ const takeWhile = (xs, predicate) =>
   );
 
 /**
- * @param {import('google-spreadsheet').GoogleSpreadsheetWorksheet} sheet
+ * @param {GoogleSpreadsheetWorksheet} sheet
  * @param {string | number} key
- * @param {Record<string, string | number>} record
  */
-const upsert = async (sheet, key, record) => {
+const lookup = async (sheet, key) => {
   // load primary key column
   await sheet.loadCells({
     startColumnIndex: 0,
@@ -23,7 +22,18 @@ const upsert = async (sheet, key, record) => {
     return key === value || value === null;
   });
   if (destIndex < 0) throw Error('key not found and no available rows');
-  let [row] = await sheet.getRows({ offset: destIndex - 1, limit: 1 });
+  const rows = await sheet.getRows({ offset: destIndex - 1, limit: 1 });
+  return rows.length ? rows[0] : undefined;
+};
+
+/**
+ * @param {GoogleSpreadsheetWorksheet} sheet
+ * @param {string | number} key
+ * @param {Record<string, string | number>} record
+ * @typedef {import('google-spreadsheet').GoogleSpreadsheetWorksheet} GoogleSpreadsheetWorksheet
+ */
+const upsert = async (sheet, key, record) => {
+  let row = await lookup(sheet, key);
   if (row) {
     Object.assign(row, record);
     await row.save({ raw: true });
@@ -60,7 +70,7 @@ const main = async (argv, env, { GoogleSpreadsheet }) => {
   });
 };
 
-/* global require, process, module */
+/* global require, process */
 if (require.main === module) {
   main(
     process.argv.slice(2),
@@ -71,3 +81,6 @@ if (require.main === module) {
     },
   ).catch(err => console.error(err));
 }
+
+/* global module */
+module.exports = { lookup, upsert };
