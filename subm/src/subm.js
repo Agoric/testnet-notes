@@ -38,6 +38,16 @@ const AgoricStyle = freeze({
     table {
       border-collapse: collapse;
     }
+    .success {
+      color: #4F8A10;
+      background-color: #DFF2BF;
+      font-size: x-large;
+    }
+    .warning {
+      color: #9F6000;
+      background-color: #FEEFB3;
+      font-size: x-large;
+    }
   </style>
   </head>
 
@@ -159,7 +169,7 @@ const Site = freeze({
   /**
    * @param { GuildMember } member
    * @param { ContactInfo } contactInfo
-   * @param { boolean } ack
+   * @param { 'ok' | 'incomplete' | undefined } ack
    */
   contactForm: (
     member,
@@ -180,22 +190,31 @@ ${Site.welcome(member)}
 
 <form method="POST" >
   <fieldset><legend>Contact Info</legend>
-    <label>Email: <input name="email" type="email"
+    ${
+      ack === 'ok'
+        ? `<p class="success"><b>Contact info updated.</b> Thank you.</p>`
+        : ''
+    }
+    ${
+      ack === 'incomplete'
+        ? `<p class="warning">Contact info <b>incomplete. Please provide all fields.</b></p>`
+        : ''
+    }
+    <label>*Email: <input name="email" type="email"
      value="${email || ''}"/></label>
-    <label>Full Name: <input name="fullName"
+    <label>*Full Name: <input name="fullName"
      value="${fullName || ''}"/></label>
     <label>Briefly describe your interest in Agoric:<br />
      <textarea name="interestInAgoric" rows="6" columns="60">${interestInAgoric ||
        ''}</textarea>
       </label>
-    <label>Country of residence: <input name="countryOfResidence"
+    <label>*Country of residence: <input name="countryOfResidence"
       value="${countryOfResidence || ''}"/></label>
-    <label>I agree to be contacted by Agoric regarding opportunities:
+    <label>*I agree to be contacted by Agoric regarding opportunities:
      ${Site.yesNo('agreeToBeContacted', agreeToBeContacted)}</label>
-    <label>I agree to receive the Agoric Newsletter to keep me updated on Agoric progress and news:
+    <label>*I agree to receive the Agoric Newsletter to keep me updated on Agoric progress and news:
     ${Site.yesNo('agreeToReceiveNewsletter', agreeToReceiveNewsletter)}</label>
     <input type="submit" value="Submit">
-    ${ack ? `<p><b>Contact info updated. Thank you.</b></p>` : ''}
   </fieldset>
 </form>
   `,
@@ -344,6 +363,20 @@ function makeContact(sheet, member) {
       }),
   });
 }
+
+/** @param {ContactInfo} contactInfo */
+const contactInfoComplete = ({
+  email,
+  fullName,
+  countryOfResidence,
+  agreeToBeContacted,
+  agreeToReceiveNewsletter,
+}) =>
+  email &&
+  fullName &&
+  countryOfResidence &&
+  agreeToBeContacted &&
+  agreeToReceiveNewsletter;
 
 /**
  * @param {GuildMember} member
@@ -580,11 +613,7 @@ async function main(
     } catch (_notFound) {
       // never mind;
     }
-    const page = Site.contactForm(
-      contact.member,
-      contactInfo,
-      req.query.ack === '1',
-    );
+    const page = Site.contactForm(contact.member, contactInfo, req.query.ack);
     res.send(page);
   });
   app.post(Site.path.contactForm, loginCheck, async (req, res) => {
@@ -598,15 +627,20 @@ async function main(
       agreeToReceiveNewsletter,
     } = req.body;
     if (typeof email !== 'string') throw TypeError(email);
-    await contact.setContactInfo({
+    const contactInfo = {
       email,
       fullName,
       countryOfResidence,
       interestInAgoric,
       agreeToBeContacted,
       agreeToReceiveNewsletter,
-    });
-    res.redirect(`${Site.path.contactForm}?ack=1`);
+    };
+    await contact.setContactInfo(contactInfo);
+    res.redirect(
+      `${Site.path.contactForm}?ack=${
+        contactInfoComplete(contactInfo) ? 'ok' : 'incomplete'
+      }`,
+    );
   });
 
   // Upload form
