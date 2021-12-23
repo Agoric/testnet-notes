@@ -526,11 +526,7 @@ async function main(
     const contact = /** @type { ReturnType<typeof makeContact> } */ (req.user);
     const { user } = contact.member;
     if (!user) throw Error('no user');
-    const detail = await discordAPI.users(user.id);
-    let email = detail.email; // ISSUE: why is email missing? what bot permission am I missing?
-    if (!email) {
-      email = await contact.getEmail();
-    }
+    const email = await contact.getEmail();
     const page = Site.contactForm(contact.member, email, req.query.ack === '1');
     res.send(page);
   });
