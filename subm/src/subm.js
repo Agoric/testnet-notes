@@ -142,20 +142,57 @@ const Site = freeze({
   `,
 
   /**
+   * @param { string } name
+   * @param { 'yes' | 'no' | undefined } value
+   */
+  yesNo: (name, value) => `
+  <ul style="list-style: none;">
+    <li><label><input type="radio" name="${name}"
+                  value="yes" ${value === 'yes' ? 'checked' : ''}
+                /> Yes</label></li>
+    <li><label><input type="radio" name="${name}"
+                value="no" ${value === 'no' ? 'checked' : ''}
+              /> No</label></li>
+ </ul>
+  `,
+  /**
    * @param { GuildMember } member
-   * @param { string | undefined } email
+   * @param { ContactInfo } contactInfo
    * @param { boolean } ack
    */
-  contactForm: (member, email, ack) => `${AgoricStyle.top}
+  contactForm: (
+    member,
+    {
+      email,
+      fullName,
+      countryOfResidence,
+      interestInAgoric,
+      agreeToBeContacted,
+      agreeToReceiveNewsletter,
+    },
+    ack,
+  ) => `${AgoricStyle.top}
 
 <h1>Contact Info</h1>
 
 ${Site.welcome(member)}
 
 <form method="POST" >
-  <fieldset><legend>Email Address</legend>
+  <fieldset><legend>Contact Info</legend>
     <label>Email: <input name="email" type="email"
      value="${email || ''}"/></label>
+    <label>First and Last Name: <input name="fullName"
+     value="${fullName || ''}"/></label>
+    <label>Country of residence: <input name="countryOfResidence"
+     value="${countryOfResidence || ''}"/></label>
+    <label>Briefly describe your interest in Agoric:<br />
+     <textarea name="interestInAgoric" rows="6" columns="60">${interestInAgoric ||
+       ''}</textarea>
+      </label>
+    <label>I agree to be contacted by Agoric regarding opportunities:
+     ${Site.yesNo('agreeToBeContacted', agreeToBeContacted)}</label>
+    <label>I agree to receive the Agoric Newsletter to keep me updated on Agoric progress and news:
+    ${Site.yesNo('agreeToReceiveNewsletter', agreeToReceiveNewsletter)}</label>
     <input type="submit" value="Submit">
   </fieldset>
   ${ack ? `<p><b>Contact info updated. Thank you.</b></p>` : ''}
@@ -255,29 +292,50 @@ ${Site.fileList(files)}
 /**
  * @param {GoogleSpreadsheetWorksheet} sheet
  * @param {GuildMember} member
+ * @typedef {{
+ *   email?: string,
+ *   fullName?: string,
+ *   countryOfResidence?: string,
+ *   interestInAgoric?: string,
+ *   agreeToBeContacted?: 'yes' | 'no',
+ *   agreeToReceiveNewsletter?: 'yes' | 'no',
+ * }} ContactInfo
  */
 function makeContact(sheet, member) {
   const { user } = member;
   if (!user) throw TypeError('user undefined');
   return freeze({
     member,
-    getEmail: async () => {
+    /** @returns { Promise<ContactInfo> } */
+    getContactInfo: async () => {
       const row = await lookup(sheet, user.id);
-      if (!row) return undefined;
-      if (typeof row.email !== 'string') throw TypeError(row.email);
-      return row.email;
+      if (!row) throw RangeError(user.id);
+      const {
+        email,
+        fullName,
+        countryOfResidence,
+        interestInAgoric,
+        agreeToReceiveNewsletter,
+      } = row;
+      return {
+        email,
+        fullName,
+        countryOfResidence,
+        interestInAgoric,
+        agreeToReceiveNewsletter,
+      };
     },
 
     /**
-     * @param {string} email
+     * @param {ContactInfo} contactInfo
      */
-    setEmail: email =>
+    setContactInfo: contactInfo =>
       upsert(sheet, user.id, {
         userID: user.id,
         joined_at: member.joined_at,
         nick: member.nick || (member.user || {}).username || '<nick???>',
-        email,
         detail: JSON.stringify(member, null, 2),
+        ...contactInfo,
       }),
   });
 }
@@ -526,15 +584,36 @@ async function main(
     const contact = /** @type { ReturnType<typeof makeContact> } */ (req.user);
     const { user } = contact.member;
     if (!user) throw Error('no user');
-    const email = await contact.getEmail();
-    const page = Site.contactForm(contact.member, email, req.query.ack === '1');
+    let contactInfo = {};
+    try {
+      contactInfo = await contact.getContactInfo();
+    } catch (_notFound) {
+      // never mind;
+    }
+    const page = Site.contactForm(
+      contact.member,
+      contactInfo,
+      req.query.ack === '1',
+    );
     res.send(page);
   });
   app.post(Site.path.contactForm, loginCheck, async (req, res) => {
     const contact = /** @type { ReturnType<typeof makeContact> } */ (req.user);
-    const { email } = req.body;
+    const {
+      email,
+      fullName,
+      countryOfResidence,
+      interestInAgoric,
+      agreeToReceiveNewsletter,
+    } = req.body;
     if (typeof email !== 'string') throw TypeError(email);
-    await contact.setEmail(email);
+    await contact.setContactInfo({
+      email,
+      fullName,
+      countryOfResidence,
+      interestInAgoric,
+      agreeToReceiveNewsletter,
+    });
     res.redirect(`${Site.path.contactForm}?ack=1`);
   });
 
