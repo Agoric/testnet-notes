@@ -53,7 +53,10 @@ const main = async (argv, env, { GoogleSpreadsheet }) => {
   // Initialize the sheet - doc ID is the long id in the sheets URL
   const doc = new GoogleSpreadsheet(env.SHEET1_ID);
 
-  const creds = JSON.parse(env.GCS_SERVICE_ACCOUNT);
+  const creds = {
+    client_email: env.GOOGLE_SERVICES_EMAIL,
+    private_key: env.GCS_PRIVATE_KEY,
+  };
   // Initialize Auth - see https://theoephraim.github.io/node-google-spreadsheet/#/getting-started/authentication
   await doc.useServiceAccountAuth(creds);
 

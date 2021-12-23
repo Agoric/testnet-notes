@@ -464,7 +464,11 @@ async function main(
   );
 
   const doc = new GoogleSpreadsheet(config`SHEET1_ID`);
-  await doc.useServiceAccountAuth(JSON.parse(config`GCS_SERVICE_ACCOUNT`));
+
+  await doc.useServiceAccountAuth({
+    client_email: config`GOOGLE_SERVICES_EMAIL`,
+    private_key: config`GCS_PRIVATE_KEY`,
+  });
   await doc.loadInfo();
 
   const discordAPI = DiscordAPI(config`DISCORD_API_TOKEN`, { get });
