@@ -535,7 +535,7 @@ async function main(
     const { email } = req.body;
     if (typeof email !== 'string') throw TypeError(email);
     await contact.setEmail(email);
-    res.redirect(''); // same page
+    res.redirect(Site.path.contactForm);
   });
 
   // Upload form
