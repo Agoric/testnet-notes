@@ -182,14 +182,14 @@ ${Site.welcome(member)}
   <fieldset><legend>Contact Info</legend>
     <label>Email: <input name="email" type="email"
      value="${email || ''}"/></label>
-    <label>First and Last Name: <input name="fullName"
+    <label>Full Name: <input name="fullName"
      value="${fullName || ''}"/></label>
-    <label>Country of residence: <input name="countryOfResidence"
-     value="${countryOfResidence || ''}"/></label>
     <label>Briefly describe your interest in Agoric:<br />
      <textarea name="interestInAgoric" rows="6" columns="60">${interestInAgoric ||
        ''}</textarea>
       </label>
+    <label>Country of residence: <input name="countryOfResidence"
+      value="${countryOfResidence || ''}"/></label>
     <label>I agree to be contacted by Agoric regarding opportunities:
      ${Site.yesNo('agreeToBeContacted', agreeToBeContacted)}</label>
     <label>I agree to receive the Agoric Newsletter to keep me updated on Agoric progress and news:
