@@ -318,6 +318,7 @@ function makeContact(sheet, member) {
         fullName,
         countryOfResidence,
         interestInAgoric,
+        agreeToBeContacted,
         agreeToReceiveNewsletter,
       } = row;
       return {
@@ -325,6 +326,7 @@ function makeContact(sheet, member) {
         fullName,
         countryOfResidence,
         interestInAgoric,
+        agreeToBeContacted,
         agreeToReceiveNewsletter,
       };
     },
@@ -592,6 +594,7 @@ async function main(
       fullName,
       countryOfResidence,
       interestInAgoric,
+      agreeToBeContacted,
       agreeToReceiveNewsletter,
     } = req.body;
     if (typeof email !== 'string') throw TypeError(email);
@@ -600,6 +603,7 @@ async function main(
       fullName,
       countryOfResidence,
       interestInAgoric,
+      agreeToBeContacted,
       agreeToReceiveNewsletter,
     });
     res.redirect(`${Site.path.contactForm}?ack=1`);
