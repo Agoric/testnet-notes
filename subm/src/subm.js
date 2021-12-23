@@ -267,15 +267,14 @@ function makeContact(sheet, member) {
     /**
      * @param {string} email
      */
-    setEmail: email => {
+    setEmail: email =>
       upsert(sheet, user.id, {
         userID: user.id,
         joined_at: member.joined_at,
         nick: member.nick || '<nick???>',
         email,
         detail: JSON.stringify(member, null, 2),
-      });
-    },
+      }),
   });
 }
 
@@ -499,6 +498,7 @@ async function main(
   );
   app.use(aPassport.initialize());
   app.use(aPassport.session());
+  app.use(express.urlencoded({ extended: true }));
   app.get(Site.path.login, loginHandler);
   app.get(
     Site.path.callback,
@@ -529,6 +529,13 @@ async function main(
     }
     const page = Site.contactForm(contact.member, email);
     res.send(page);
+  });
+  app.post(Site.path.contactForm, loginCheck, async (req, res) => {
+    const contact = /** @type { ReturnType<typeof makeContact> } */ (req.user);
+    const { email } = req.body;
+    if (typeof email !== 'string') throw TypeError(email);
+    await contact.setEmail(email);
+    res.redirect(''); // same page
   });
 
   // Upload form
