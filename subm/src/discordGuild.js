@@ -1,7 +1,7 @@
 /* global Buffer */
 // @ts-check
 
-const { freeze } = Object;
+const { entries, freeze } = Object;
 
 /**
  * @param {string} host
@@ -33,6 +33,12 @@ function getContent(host, path, headers, { get }) {
     });
   });
 }
+
+const query = params =>
+  entries(params)
+    .filter(([_n, value]) => value !== undefined)
+    .map(([name, value]) => `${name}=${encodeURI(value)}`)
+    .join('&');
 
 /**
  * Discord API (a small slice of it, anyway)
@@ -95,6 +101,15 @@ function DiscordAPI(token, { get }) {
         members(userID) {
           return getJSON(`${api}/guilds/${guildID}/members/${userID}`);
         },
+        /**
+         * @param {{ limit?: number, after?: string}=} opts
+         * @returns { Promise<GuildMember[]> }
+         */
+        membersList({ limit, after } = {}) {
+          return getJSON(
+            `${api}/guilds/${guildID}/members?${query({ limit, after })}`,
+          );
+        },
       });
     },
   });
@@ -105,6 +120,57 @@ const avatarBase = 'https://cdn.discordapp.com/avatars';
 /** @param { DiscordUser | undefined } user */
 function avatar(user) {
   return `${avatarBase}/${user?.id}/${user?.avatar}.png`;
+}
+
+/**
+ * @param { NodeJS.ProcessEnv } env
+ * @returns { TemplateTag }
+ * @typedef { (parts: TemplateStringsArray, ...args: unknown[]) => string } TemplateTag
+ */
+const makeConfig = env => {
+  return ([name], ..._args) => {
+    const value = env[name];
+    if (value === undefined) {
+      throw Error(`${name} not configured`);
+    }
+    return value;
+  };
+};
+
+/**
+ * @param {Record<string, string | undefined>} env
+ * @param {{
+ *   get: typeof import('https').get,
+ *   stdout: typeof import('process').stdout
+ * }} io
+ */
+async function main(env, { stdout, get }) {
+  const config = makeConfig(env);
+  const discordAPI = DiscordAPI(config`DISCORD_API_TOKEN`, { get });
+  const guild = discordAPI.guilds(config`DISCORD_GUILD_ID`);
+
+  const pages = [];
+  const limit = 1000;
+  let after;
+  do {
+    console.error('getting page', pages.length, after);
+    // eslint-disable-next-line no-await-in-loop
+    const page = await guild.membersList({ limit, after });
+    if (!page.length) break;
+    after = page.slice(-1)[0].user.id;
+    pages.push(page);
+  } while (after);
+  const members = pages.flat();
+  stdout.write(JSON.stringify(members, null, 2));
+}
+
+/* global require, process */
+if (require.main === module) {
+  main(process.env, {
+    stdout: process.stdout,
+    // eslint-disable-next-line global-require
+    get: require('https').get,
+  }).catch(err => console.error(err));
 }
 
 /* global module */
