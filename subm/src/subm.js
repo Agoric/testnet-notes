@@ -144,8 +144,9 @@ const Site = freeze({
   /**
    * @param { GuildMember } member
    * @param { string | undefined } email
+   * @param { boolean } ack
    */
-  contactForm: (member, email) => `${AgoricStyle.top}
+  contactForm: (member, email, ack) => `${AgoricStyle.top}
 
 <h1>Contact Info</h1>
 
@@ -157,6 +158,7 @@ ${Site.welcome(member)}
      value="${email || ''}"/></label>
     <input type="submit" value="Submit">
   </fieldset>
+  ${ack ? `<p><b>Contact info updated. Thank you.</b></p>` : ''}
 </form>
   `,
   /**
@@ -529,7 +531,7 @@ async function main(
     if (!email) {
       email = await contact.getEmail();
     }
-    const page = Site.contactForm(contact.member, email);
+    const page = Site.contactForm(contact.member, email, req.query.ack === '1');
     res.send(page);
   });
   app.post(Site.path.contactForm, loginCheck, async (req, res) => {
@@ -537,7 +539,7 @@ async function main(
     const { email } = req.body;
     if (typeof email !== 'string') throw TypeError(email);
     await contact.setEmail(email);
-    res.redirect(Site.path.contactForm);
+    res.redirect(`${Site.path.contactForm}?ack=1`);
   });
 
   // Upload form
