@@ -194,8 +194,8 @@ ${Site.welcome(member)}
     <label>I agree to receive the Agoric Newsletter to keep me updated on Agoric progress and news:
     ${Site.yesNo('agreeToReceiveNewsletter', agreeToReceiveNewsletter)}</label>
     <input type="submit" value="Submit">
+    ${ack ? `<p><b>Contact info updated. Thank you.</b></p>` : ''}
   </fieldset>
-  ${ack ? `<p><b>Contact info updated. Thank you.</b></p>` : ''}
 </form>
   `,
   /**
