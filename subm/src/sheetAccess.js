@@ -1,9 +1,4 @@
 const range = n => [...Array(n).keys()];
-const takeWhile = (xs, predicate) =>
-  xs.slice(
-    0,
-    xs.findIndex(x => !predicate(x)),
-  );
 
 /**
  * @param {GoogleSpreadsheetWorksheet} sheet

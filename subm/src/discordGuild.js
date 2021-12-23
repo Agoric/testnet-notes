@@ -1,5 +1,6 @@
 /* global Buffer */
 // @ts-check
+const { makeConfig } = require('./config.js');
 
 const { entries, freeze } = Object;
 
@@ -156,21 +157,6 @@ async function pagedMembers(guild) {
   } while (after);
   return pages.flat();
 }
-
-/**
- * @param { NodeJS.ProcessEnv } env
- * @returns { TemplateTag }
- * @typedef { (parts: TemplateStringsArray, ...args: unknown[]) => string } TemplateTag
- */
-const makeConfig = env => {
-  return ([name], ..._args) => {
-    const value = env[name];
-    if (value === undefined) {
-      throw Error(`${name} not configured`);
-    }
-    return value;
-  };
-};
 
 /**
  * @param {Record<string, string | undefined>} env

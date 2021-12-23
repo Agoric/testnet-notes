@@ -1,5 +1,6 @@
 /* global Buffer */
 // @ts-check
+const { makeConfig } = require('./config.js');
 
 const { freeze } = Object; // IOU ses / harden
 
@@ -44,21 +45,6 @@ function makeFirebaseAdmin(admin, firebaseConfig) {
     },
   });
 }
-
-/**
- * @param { NodeJS.ProcessEnv } env
- * @returns { TemplateTag }
- * @typedef { (parts: TemplateStringsArray, ...args: unknown[]) => string } TemplateTag
- */
-const makeConfig = env => {
-  return ([name], ..._args) => {
-    const value = env[name];
-    if (value === undefined) {
-      throw Error(`${name} not configured`);
-    }
-    return value;
-  };
-};
 
 /**
  * @param {string[]} args

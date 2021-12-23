@@ -18,6 +18,7 @@ const { DiscordAPI, avatar } = require('./discordGuild.js');
 const { makeFirebaseAdmin, getFirebaseConfig } = require('./firebaseTool.js');
 const { generateV4SignedPolicy } = require('./objStore.js');
 const { lookup, upsert } = require('./sheetAccess.js');
+const { makeConfig } = require('./config.js');
 
 const { freeze, keys, values, entries } = Object; // please excuse freeze vs. harden
 
@@ -473,21 +474,6 @@ function makeDiscordBot(guild, authorizedRoles, opts, powers) {
 
   return self;
 }
-
-/**
- * @param { NodeJS.ProcessEnv } env
- * @returns { TemplateTag }
- * @typedef { (parts: TemplateStringsArray, ...args: unknown[]) => string } TemplateTag
- */
-const makeConfig = env => {
-  return ([name], ..._args) => {
-    const value = env[name];
-    if (value === undefined) {
-      throw Error(`${name} not configured`);
-    }
-    return value;
-  };
-};
 
 /**
  * @param { NodeJS.ProcessEnv } env
