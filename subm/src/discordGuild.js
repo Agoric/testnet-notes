@@ -2,7 +2,7 @@
 // @ts-check
 const { makeConfig } = require('./config.js');
 
-const { entries, freeze } = Object;
+const { freeze } = Object;
 
 /**
  * @param {string} host
@@ -34,12 +34,6 @@ function getContent(host, path, headers, { get }) {
     });
   });
 }
-
-const query = params =>
-  entries(params)
-    .filter(([_n, value]) => value !== undefined)
-    .map(([name, value]) => `${name}=${encodeURI(value)}`)
-    .join('&');
 
 /**
  * Discord API (a small slice of it, anyway)
@@ -118,13 +112,16 @@ function DiscordAPI(token, { get }) {
           return getJSON(`${api}/guilds/${guildID}/members/${userID}`);
         },
         /**
-         * @param {{ limit?: number, after?: string}=} opts
+         * @param {{ limit?: number, after?: string }} opts
          * @returns { Promise<GuildMember[]> }
          */
-        membersList({ limit, after } = {}) {
-          return getJSON(
-            `${api}/guilds/${guildID}/members?${query({ limit, after })}`,
-          );
+        membersList({ limit, after }) {
+          /** @type {Record<string, string>} */
+          const opts = after
+            ? { limit: `${limit}`, after }
+            : { limit: `${limit}` };
+          const query = new URLSearchParams(opts).toString();
+          return getJSON(`${api}/guilds/${guildID}/members?${query}`);
         },
       });
     },
@@ -146,13 +143,16 @@ async function pagedMembers(guild) {
   /** @type {GuildMember[][]} */
   const pages = [];
   const limit = 1000;
+  /** @type { string | undefined } */
   let after;
   do {
     console.error('getting page', pages.length, after);
     // eslint-disable-next-line no-await-in-loop
     const page = await guild.membersList({ limit, after });
     if (!page.length) break;
-    after = page.slice(-1)[0].user.id;
+    const { user } = page.slice(-1)[0];
+    if (!user) throw RangeError(user);
+    after = user.id;
     pages.push(page);
   } while (after);
   return pages.flat();
