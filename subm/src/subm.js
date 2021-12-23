@@ -135,7 +135,9 @@ const Site = freeze({
   welcome: member => `
     <figure>
     <img class="avatar" src="${avatar(member.user)}" />
-    <figcaption>Welcome <b>${member.nick || 'participant'}</b>.</figcaption>
+    <figcaption>Welcome <b>${member.nick ||
+      (member.user || {}).username ||
+      'participant'}</b>.</figcaption>
     </figure>
   `,
 
@@ -271,7 +273,7 @@ function makeContact(sheet, member) {
       upsert(sheet, user.id, {
         userID: user.id,
         joined_at: member.joined_at,
-        nick: member.nick || '<nick???>',
+        nick: member.nick || (member.user || {}).username || '<nick???>',
         email,
         detail: JSON.stringify(member, null, 2),
       }),
