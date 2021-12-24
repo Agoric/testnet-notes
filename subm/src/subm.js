@@ -17,6 +17,8 @@ const { DiscordAPI, avatar } = require('./discordGuild.js');
 /** @typedef { import('./discordGuild.js').GuildMember } GuildMember */
 const { makeFirebaseAdmin, getFirebaseConfig } = require('./firebaseTool.js');
 const { generateV4SignedPolicy } = require('./objStore.js');
+const { lookup, upsert } = require('./sheetAccess.js');
+const { makeConfig } = require('./config.js');
 
 const { freeze, keys, values, entries } = Object; // please excuse freeze vs. harden
 
@@ -27,7 +29,7 @@ const AgoricStyle = freeze({
   top: `
   <!doctype html>
   <head>
-  <title>Agoric Testnet Submission</title>
+  <title>Agoric Submission Tool</title>
   <style>
     label { display: block; padding: .5em }
     .avatar {
@@ -35,6 +37,16 @@ const AgoricStyle = freeze({
     }
     table {
       border-collapse: collapse;
+    }
+    .success {
+      color: #4F8A10;
+      background-color: #DFF2BF;
+      font-size: x-large;
+    }
+    .warning {
+      color: #9F6000;
+      background-color: #FEEFB3;
+      font-size: x-large;
     }
   </style>
   </head>
@@ -44,7 +56,7 @@ const AgoricStyle = freeze({
   <a href="https://agoric.com/"
   ><img alt="Agoric" align="bottom"
      src="https://agoric.com/wp-content/themes/agoric_2021_theme/assets/img/logo.svg"
-      /></a> &middot; <a href="https://validate.agoric.com/">Incentivized Testnet</a>
+      /></a>
   <br />
   <hr />
   <address>
@@ -59,6 +71,7 @@ const Site = freeze({
     login: '/auth/discord',
     callback: '/auth/discord/callback',
     badLogin: '/loginRefused',
+    contactForm: '/community/contact',
     uploadSlog: '/participant/slogForm',
     uploadSuccess: '/participant/slogOK',
     loadGenKey: '/participant/loadGenKey',
@@ -89,7 +102,19 @@ const Site = freeze({
   },
 
   start: () => `${AgoricStyle.top}
-<h1>Incentivized Testnet Participants</h1>
+<h2>Community Participants</h1>
+
+<form action="/auth/discord">
+<fieldset>
+<legend>To Submit Contact Info</legend>
+<large>
+<button type="submit">Login via Discord</button>
+</large>
+</fieldset>
+</form>
+</div>
+
+<h2>Incentivized Testnet Participants</h1>
 
 <form action="/auth/discord">
 <fieldset>
@@ -104,13 +129,16 @@ const Site = freeze({
 
   testnetRoles: {
     'testnet-participant': '819067161371738173',
+    Community: '757035496198111262',
     // TODO: support for many-to-one discord to moniker
     // 'testnet-teammate': '825108158744756226',
     team: '754111409645682700',
   },
 
   badLogin: () => `${AgoricStyle.top}
-  <p><strong>Login refused.</strong> Only Incentivized Testnet participants are allowed.</p>
+  <p><strong>Login refused.</strong> Only ${keys(Site.testnetRoles).join(
+    '/',
+  )} members are allowed.</p>
   <form action="/"><button type="submit">Try again</button></form>
   `,
 
@@ -118,10 +146,78 @@ const Site = freeze({
   welcome: member => `
     <figure>
     <img class="avatar" src="${avatar(member.user)}" />
-    <figcaption>Welcome <b>${member.nick || 'participant'}</b>.</figcaption>
+    <figcaption>Welcome <b>${member.nick ||
+      (member.user || {}).username ||
+      'participant'}</b>.</figcaption>
     </figure>
   `,
 
+  /**
+   * @param { string } name
+   * @param { 'yes' | 'no' | undefined } value
+   */
+  yesNo: (name, value) => `
+  <ul style="list-style: none;">
+    <li><label><input type="radio" name="${name}"
+                  value="yes" ${value === 'yes' ? 'checked' : ''}
+                /> Yes</label></li>
+    <li><label><input type="radio" name="${name}"
+                value="no" ${value === 'no' ? 'checked' : ''}
+              /> No</label></li>
+ </ul>
+  `,
+  /**
+   * @param { GuildMember } member
+   * @param { ContactInfo } contactInfo
+   * @param { 'ok' | 'incomplete' | undefined } ack
+   */
+  contactForm: (
+    member,
+    {
+      email,
+      fullName,
+      countryOfResidence,
+      interestInAgoric,
+      agreeToBeContacted,
+      agreeToReceiveNewsletter,
+    },
+    ack,
+  ) => `${AgoricStyle.top}
+
+<h1>Contact Info</h1>
+
+${Site.welcome(member)}
+
+<form method="POST" >
+  <fieldset><legend>Contact Info</legend>
+    ${
+      ack === 'ok'
+        ? `<p class="success"><b>Contact info updated.</b> Thank you.</p>`
+        : ''
+    }
+    ${
+      ack === 'incomplete'
+        ? `<p class="warning">Contact info <b>incomplete. Please provide all fields.</b></p>`
+        : ''
+    }
+    <label>*Email: <input name="email" type="email"
+     value="${email || ''}"/></label>
+    <label>*Full Name: <input name="fullName"
+     value="${fullName || ''}"/></label>
+    <label>Briefly describe your interest in Agoric:<br />
+     <textarea name="interestInAgoric" rows="6" columns="60">${interestInAgoric ||
+       ''}</textarea>
+      </label>
+    <label>*Country of residence: <input name="countryOfResidence"
+      value="${countryOfResidence || ''}"/></label>
+    <label>*I agree to be contacted by Agoric regarding opportunities:
+     ${Site.yesNo('agreeToBeContacted', agreeToBeContacted)}</label>
+    <label>*I agree to receive the Agoric Newsletter to keep me updated on Agoric progress and news:
+    ${Site.yesNo('agreeToReceiveNewsletter', agreeToReceiveNewsletter)}</label>
+    <input type="submit" value="Submit">
+  </fieldset>
+</form>
+  `,
   /**
    * @param { GuildMember } member
    * @param { string } combinedToken
@@ -214,6 +310,75 @@ ${Site.fileList(files)}
 });
 
 /**
+ * @param {GoogleSpreadsheetWorksheet} sheet
+ * @param {GuildMember} member
+ * @typedef {{
+ *   email?: string,
+ *   fullName?: string,
+ *   countryOfResidence?: string,
+ *   interestInAgoric?: string,
+ *   agreeToBeContacted?: 'yes' | 'no',
+ *   agreeToReceiveNewsletter?: 'yes' | 'no',
+ * }} ContactInfo
+ */
+function makeContact(sheet, member) {
+  const { user } = member;
+  if (!user) throw TypeError('user undefined');
+  return freeze({
+    member,
+    /**
+     * @returns { Promise<ContactInfo> }
+     * @throws on not found
+     */
+    getContactInfo: async () => {
+      const row = await lookup(sheet, user.id);
+      const {
+        email,
+        fullName,
+        countryOfResidence,
+        interestInAgoric,
+        agreeToBeContacted,
+        agreeToReceiveNewsletter,
+      } = row;
+      return {
+        email,
+        fullName,
+        countryOfResidence,
+        interestInAgoric,
+        agreeToBeContacted,
+        agreeToReceiveNewsletter,
+      };
+    },
+
+    /**
+     * @param {ContactInfo} contactInfo
+     */
+    setContactInfo: contactInfo =>
+      upsert(sheet, user.id, {
+        userID: user.id,
+        joined_at: member.joined_at,
+        nick: member.nick || (member.user || {}).username || '<nick???>',
+        detail: JSON.stringify(member, null, 2),
+        ...contactInfo,
+      }),
+  });
+}
+
+/** @param {ContactInfo} contactInfo */
+const contactInfoComplete = ({
+  email,
+  fullName,
+  countryOfResidence,
+  agreeToBeContacted,
+  agreeToReceiveNewsletter,
+}) =>
+  email &&
+  fullName &&
+  countryOfResidence &&
+  agreeToBeContacted &&
+  agreeToReceiveNewsletter;
+
+/**
  * @param {GuildMember} member
  * @param { string } bucket
  * @param { StorageT } objectStore
@@ -265,7 +430,9 @@ function makeTestnetParticipant(member, bucket, objectStore, loadGenAdmin) {
  * @param { StorageT } powers.objectStore
  * @param { string } powers.bucketName
  * @param { FirebaseAdmin } powers.loadGenAdmin
+ * @param { GoogleSpreadsheetWorksheet } powers.contactSheet
  * @typedef {import('./discordGuild.js').Snowflake} Snowflake
+ * @typedef { import('google-spreadsheet').GoogleSpreadsheetWorksheet} GoogleSpreadsheetWorksheet
  */
 function makeDiscordBot(guild, authorizedRoles, opts, powers) {
   /** @param { GuildMember } mem */
@@ -278,13 +445,22 @@ function makeDiscordBot(guild, authorizedRoles, opts, powers) {
   };
 
   /** @param { GuildMember } member */
-  const reviveMember = member =>
-    makeTestnetParticipant(
-      member,
-      powers.bucketName,
-      powers.objectStore,
-      powers.loadGenAdmin,
-    );
+  const reviveMember = member => {
+    // ISSUE: make testnet participant powers available based on role.
+    // eslint-disable-next-line no-constant-condition
+    const tester = false
+      ? makeTestnetParticipant(
+          member,
+          powers.bucketName,
+          powers.objectStore,
+          powers.loadGenAdmin,
+        )
+      : {};
+    return freeze({
+      ...makeContact(powers.contactSheet, member),
+      ...tester,
+    });
+  };
 
   const self = freeze({
     /** @param {string} failureRedirect */
@@ -338,31 +514,20 @@ function makeDiscordBot(guild, authorizedRoles, opts, powers) {
 
 /**
  * @param { NodeJS.ProcessEnv } env
- * @returns { TemplateTag }
- * @typedef { (parts: TemplateStringsArray, ...args: unknown[]) => string } TemplateTag
- */
-const makeConfig = env => {
-  return ([name], ..._args) => {
-    const value = env[name];
-    if (value === undefined) {
-      throw Error(`${name} not configured`);
-    }
-    return value;
-  };
-};
-
-/**
- * @param { NodeJS.ProcessEnv } env
  * @param {{
  *   clock: () => number,
  *   get: typeof import('https').get,
  *   express: typeof import('express'),
+ *   GoogleSpreadsheet: typeof import('google-spreadsheet').GoogleSpreadsheet,
  *   makeStorage: (...args: unknown[]) => StorageT,
  *   admin: typeof import('firebase-admin')
  * }} io
  * @typedef { import('@google-cloud/storage').Storage } StorageT
  */
-async function main(env, { clock, get, express, makeStorage, admin }) {
+async function main(
+  env,
+  { clock, get, express, makeStorage, admin, GoogleSpreadsheet },
+) {
   const app = express();
   app.enable('trust proxy'); // trust X-Forwarded-* headers
   app.get('/', (_req, res) => res.send(Site.start()));
@@ -382,6 +547,14 @@ async function main(env, { clock, get, express, makeStorage, admin }) {
     }),
   );
 
+  const doc = new GoogleSpreadsheet(config`SHEET1_ID`);
+
+  await doc.useServiceAccountAuth({
+    client_email: config`GOOGLE_SERVICES_EMAIL`,
+    private_key: config`GCS_PRIVATE_KEY`,
+  });
+  await doc.loadInfo();
+
   const discordAPI = DiscordAPI(config`DISCORD_API_TOKEN`, { get });
   const guild = discordAPI.guilds(config`DISCORD_GUILD_ID`);
   const loadGenAdmin = makeFirebaseAdmin(admin, getFirebaseConfig(config));
@@ -400,6 +573,7 @@ async function main(env, { clock, get, express, makeStorage, admin }) {
       // ASSUME we are running in an environment which supports Application Default Credentials
       objectStore: makeStorage(),
       loadGenAdmin,
+      contactSheet: doc.sheetsByIndex[0],
     },
   );
 
@@ -409,11 +583,12 @@ async function main(env, { clock, get, express, makeStorage, admin }) {
   );
   app.use(aPassport.initialize());
   app.use(aPassport.session());
+  app.use(express.urlencoded({ extended: true }));
   app.get(Site.path.login, loginHandler);
   app.get(
     Site.path.callback,
     callbackHandler,
-    (_req, res) => res.redirect(Site.path.uploadSlog), // Successful auth
+    (_req, res) => res.redirect(Site.path.contactForm), // Successful auth. ISSUE: slogForm
   );
   app.get(Site.path.badLogin, (_r, res) => res.send(Site.badLogin()));
 
@@ -427,23 +602,68 @@ async function main(env, { clock, get, express, makeStorage, admin }) {
       error: app.get('env') === 'development' ? err : {},
     });
   };
+
+  app.get(Site.path.contactForm, loginCheck, async (req, res) => {
+    const contact = /** @type { ReturnType<typeof makeContact> } */ (req.user);
+    const { user } = contact.member;
+    if (!user) throw Error('no user');
+    let contactInfo = {};
+    try {
+      contactInfo = await contact.getContactInfo();
+    } catch (_notFound) {
+      // never mind;
+    }
+    const page = Site.contactForm(contact.member, contactInfo, req.query.ack);
+    res.send(page);
+  });
+  app.post(Site.path.contactForm, loginCheck, async (req, res) => {
+    const contact = /** @type { ReturnType<typeof makeContact> } */ (req.user);
+    const {
+      email,
+      fullName,
+      countryOfResidence,
+      interestInAgoric,
+      agreeToBeContacted,
+      agreeToReceiveNewsletter,
+    } = req.body;
+    if (typeof email !== 'string') throw TypeError(email);
+    const contactInfo = {
+      email,
+      fullName,
+      countryOfResidence,
+      interestInAgoric,
+      agreeToBeContacted,
+      agreeToReceiveNewsletter,
+    };
+    await contact.setContactInfo(contactInfo);
+    res.redirect(
+      `${Site.path.contactForm}?ack=${
+        contactInfoComplete(contactInfo) ? 'ok' : 'incomplete'
+      }`,
+    );
+  });
+
   // Upload form
   // Note the actual upload request goes directly to Google Cloud Storage.
-  app.get(Site.path.uploadSlog, loginCheck, async (req, res) => {
-    try {
-      const participant =
-        /** @type { ReturnType<typeof makeTestnetParticipant> } */ (req.user);
-      const policy = await participant.uploadPolicy(
-        new Date(clock()),
-        Site.uploadSuccessURL(base, req.protocol, req.hostname),
-      );
-      const files = await participant.myFiles();
-      const page = Site.uploadSlog(participant.member, policy, files);
-      res.send(page);
-    } catch (err) {
-      handleError(res, req.baseUrl, err);
-    }
-  });
+  app.get(
+    `${Site.path.uploadSlog}disabled@@@`,
+    loginCheck,
+    async (req, res) => {
+      try {
+        const participant =
+          /** @type { ReturnType<typeof makeTestnetParticipant> } */ (req.user);
+        const policy = await participant.uploadPolicy(
+          new Date(clock()),
+          Site.uploadSuccessURL(base, req.protocol, req.hostname),
+        );
+        const files = await participant.myFiles();
+        const page = Site.uploadSlog(participant.member, policy, files);
+        res.send(page);
+      } catch (err) {
+        handleError(res, req.baseUrl, err);
+      }
+    },
+  );
   app.get(Site.path.uploadSuccess, loginCheck, async (req, res) => {
     const participant =
       /** @type { ReturnType<typeof makeTestnetParticipant> } */ (req.user);
@@ -487,6 +707,8 @@ if (require.main === module) {
         require('@google-cloud/storage').Storage,
       ),
       admin: require('firebase-admin'),
+      // eslint-disable-next-line global-require
+      GoogleSpreadsheet: require('google-spreadsheet').GoogleSpreadsheet,
     },
   ).catch(err => console.error(err));
 }
