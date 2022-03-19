@@ -98,7 +98,9 @@ function DiscordAPI(token, { get }) {
           freeze({
             reactions: emoji =>
               getJSON(
-                `${api}/channels/${channelID}/messages/${messageID}/reactions/${emoji}`,
+                `${api}/channels/${channelID}/messages/${messageID}/reactions/${encodeURIComponent(
+                  emoji,
+                )}`,
               ),
           }),
       });

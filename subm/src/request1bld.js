@@ -5,6 +5,38 @@ const { DiscordAPI } = require('./discordGuild');
 
 const ADMIN_ROLE_ID = '412648251196702741';
 
+async function* authorizedRequests(channel, guild, role, quorum) {
+  const memberDetail = new Map();
+  const getMemberDetail = async id => {
+    if (memberDetail.has(id)) {
+      return memberDetail.get(id);
+    }
+    const detail = await guild.members(id);
+    memberDetail.set(id, detail);
+    return detail;
+  };
+
+  const messages = await channel.getMessages();
+  const hasAddr = messages.filter(msg => msg.content.match(/agoric1/));
+  const hasChecks = hasAddr.filter(
+    msg => msg.reactions.filter(r => r.emoji.name === '✅').length >= quorum,
+  );
+
+  for (const msg of hasChecks) {
+    const endorsements = await channel.messages(msg.id).reactions('✅');
+    const endorsers = [];
+    for (const endorsement of endorsements) {
+      const detail = await getMemberDetail(endorsement.id);
+      if (detail.roles.includes(role)) {
+        endorsers.push(detail);
+      }
+    }
+    if (endorsers.length >= quorum) {
+      yield { message: msg, endorsers };
+    }
+  }
+}
+
 /**
  * @param {Record<string, string | undefined>} env
  * @param {{
@@ -17,38 +49,13 @@ async function main(env, { stdout, get }) {
   const guild = discordAPI.guilds(env.DISCORD_GUILD_ID);
 
   const channel = discordAPI.channels(env.CHANNEL_ID);
-  const messages = await channel.getMessages();
-  for (const message of messages) {
-    if (message.content.match(/agoric1/)) {
-      console.log(message);
-      console.log(message.reactions);
-      for (const reaction of message.reactions) {
-        if (reaction.emoji.name === '✅') {
-          console.log('endorsement!!');
-          const endorsements = await channel
-            .messages(message.id)
-            .reactions(encodeURIComponent('✅'));
-          console.log(endorsements);
-          for (const endorsement of endorsements) {
-            console.log(
-              `${message.content} endorsed by ${endorsement.username}`,
-            );
-            const detail = await guild.members(endorsement.id);
-            console.log({ detail });
-            if (detail.roles.includes(ADMIN_ROLE_ID)) {
-              console.log('endorsed by admin!');
-            }
-          }
-        }
-      }
-    }
-  }
 
-  // const roles = await guild.roles();
-  // console.log(roles);
+  for await (const x of authorizedRequests(channel, guild, ADMIN_ROLE_ID, 1)) {
+    console.log(x);
+  }
 }
 
-/* global require, process */
+/* global require, process, module */
 if (require.main === module) {
   main(process.env, {
     stdout: process.stdout,
