@@ -3,8 +3,6 @@
 
 const { DiscordAPI } = require('./discordGuild');
 
-const ADMIN_ROLE_ID = '412648251196702741';
-
 async function* authorizedRequests(channel, guild, role, quorum) {
   const memberDetail = new Map();
   const getMemberDetail = async id => {
@@ -12,15 +10,19 @@ async function* authorizedRequests(channel, guild, role, quorum) {
       return memberDetail.get(id);
     }
     const detail = await guild.members(id);
+    // console.log(detail);
     memberDetail.set(id, detail);
     return detail;
   };
 
   const messages = await channel.getMessages();
   const hasAddr = messages.filter(msg => msg.content.match(/agoric1/));
-  const hasChecks = hasAddr.filter(
-    msg => msg.reactions.filter(r => r.emoji.name === '✅').length >= quorum,
-  );
+  if (!hasAddr) return;
+  const hasChecks = hasAddr.filter(msg => {
+    const [checks] = (msg.reactions || []).filter(r => r.emoji.name === '✅');
+    return (checks || {}).count >= quorum;
+  });
+  if (!hasChecks) return;
 
   for (const msg of hasChecks) {
     const endorsements = await channel.messages(msg.id).reactions('✅');
@@ -48,6 +50,9 @@ async function main(env, { stdout, get }) {
   const discordAPI = DiscordAPI(env.DISCORD_API_TOKEN, { get });
   const guild = discordAPI.guilds(env.DISCORD_GUILD_ID);
 
+  // to get mod-1-bld role id:
+  // console.log(await guild.roles());
+
   const channel = discordAPI.channels(env.CHANNEL_ID);
 
   const header = ['timestamp', 'msgID', 'requestor', 'address', 'endorsers'];
@@ -55,8 +60,8 @@ async function main(env, { stdout, get }) {
   for await (const { message: msg, endorsers } of authorizedRequests(
     channel,
     guild,
-    ADMIN_ROLE_ID,
-    1,
+    env.REVIEWER_ROLE_ID,
+    2,
   )) {
     const [_, address] = msg.content.match(/(agoric1\S+)/);
     const label = user => `${user.username}#${user.discriminator}`;
