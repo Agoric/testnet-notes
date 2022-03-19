@@ -91,6 +91,18 @@ function DiscordAPI(token, { get }) {
   };
 
   return freeze({
+    channels: channelID => {
+      return freeze({
+        getMessages: () => getJSON(`${api}/channels/${channelID}/messages`),
+        messages: messageID =>
+          freeze({
+            reactions: emoji =>
+              getJSON(
+                `${api}/channels/${channelID}/messages/${messageID}/reactions/${emoji}`,
+              ),
+          }),
+      });
+    },
     /**
      * @param { string } userID
      * @returns { Promise<UserObject> }
