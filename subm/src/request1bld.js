@@ -50,8 +50,20 @@ async function main(env, { stdout, get }) {
 
   const channel = discordAPI.channels(env.CHANNEL_ID);
 
-  for await (const x of authorizedRequests(channel, guild, ADMIN_ROLE_ID, 1)) {
-    console.log(x);
+  const header = ['timestamp', 'msgID', 'requestor', 'address', 'endorsers'];
+  console.log(header.join(','));
+  for await (const { message: msg, endorsers } of authorizedRequests(
+    channel,
+    guild,
+    ADMIN_ROLE_ID,
+    1,
+  )) {
+    const [_, address] = msg.content.match(/(agoric1\S+)/);
+    const label = user => `${user.username}#${user.discriminator}`;
+    const ok = endorsers.map(u => label(u.user)).join(' ');
+    console.log(
+      `${msg.timestamp},${msg.id},${label(msg.author)},${address},${ok}`,
+    );
   }
 }
 
