@@ -3,11 +3,25 @@
 
 const { DiscordAPI } = require('./discordGuild');
 
+const fail = () => {
+  throw Error();
+};
+
+/**
+ * @param {ReturnType<ReturnType<typeof DiscordAPI>['channels']>} channel
+ * @param {ReturnType<ReturnType<typeof DiscordAPI>['guilds']>} guild
+ * @param {Snowflake} role
+ * @param {number} quorum
+ * @yields {{ message: Message, endorsers: User[] }}
+ * @typedef {import('./discordGuild').Snowflake} Snowflake
+ */
 async function* authorizedRequests(channel, guild, role, quorum) {
+  /** @type {Map<Snowflake, import('./discordGuild').GuildMember>} */
   const memberDetail = new Map();
+  /** @param {Snowflake} id */
   const getMemberDetail = async id => {
     if (memberDetail.has(id)) {
-      return memberDetail.get(id);
+      return memberDetail.get(id) || fail();
     }
     const detail = await guild.members(id);
     // console.log(detail);
@@ -15,7 +29,7 @@ async function* authorizedRequests(channel, guild, role, quorum) {
     return detail;
   };
 
-  const messages = await channel.getMessages();
+  const messages = await channel.getMessages({ limit: 100 });
   const hasAddr = messages.filter(msg => msg.content.match(/agoric1/));
   if (!hasAddr) return;
   const hasChecks = hasAddr.filter(msg => {

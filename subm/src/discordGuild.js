@@ -35,6 +35,8 @@ function getContent(host, path, headers, { get }) {
   });
 }
 
+const query = opts => (opts ? `?${new URLSearchParams(opts).toString()}` : '');
+
 /**
  * Discord API (a small slice of it, anyway)
  *
@@ -93,7 +95,8 @@ function DiscordAPI(token, { get }) {
   return freeze({
     channels: channelID => {
       return freeze({
-        getMessages: () => getJSON(`${api}/channels/${channelID}/messages`),
+        getMessages: opts =>
+          getJSON(`${api}/channels/${channelID}/messages${query(opts)}`),
         messages: messageID =>
           freeze({
             reactions: emoji =>
@@ -134,8 +137,7 @@ function DiscordAPI(token, { get }) {
           const opts = after
             ? { limit: `${limit}`, after }
             : { limit: `${limit}` };
-          const query = new URLSearchParams(opts).toString();
-          return getJSON(`${api}/guilds/${guildID}/members?${query}`);
+          return getJSON(`${api}/guilds/${guildID}/members${query(opts)}`);
         },
       });
     },
