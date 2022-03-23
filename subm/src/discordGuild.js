@@ -41,7 +41,10 @@ const query = opts => (opts ? `?${new URLSearchParams(opts).toString()}` : '');
  * Discord API (a small slice of it, anyway)
  *
  * @param {string} token
- * @param {{ get: typeof import('https').get }} io
+ * @param {{
+ *   get: typeof import('https').get,
+ *   setTimeout: typeof setTimeout,
+ * }} io
  *
  * // https://discordapp.com/developers/docs/resources/user
  * @typedef {{
@@ -79,7 +82,7 @@ const query = opts => (opts ? `?${new URLSearchParams(opts).toString()}` : '');
  * @typedef { string } Snowflake 64 bit numeral
  * @typedef { string } TimeStamp ISO8601 format
  */
-function DiscordAPI(token, { get }) {
+function DiscordAPI(token, { get, setTimeout }) {
   // cribbed from rchain-dbr/o2r/gateway/server/main.js
   const host = 'discordapp.com';
   const api = '/api/v6';
@@ -89,6 +92,10 @@ function DiscordAPI(token, { get }) {
     const body = await getContent(host, path, headers, { get });
     const data = JSON.parse(body);
     // console.log('Discord done:', Object.keys(data));
+    if ('retry_after' in data) {
+      await new Promise(r => setTimeout(r, data.retry_after));
+      return getJSON(path);
+    }
     return data;
   };
 
@@ -179,11 +186,12 @@ async function pagedMembers(guild) {
  * @param {{
  *   get: typeof import('https').get,
  *   stdout: typeof import('process').stdout
+ *   setTimeout: typeof setTimeout,
  * }} io
  */
-async function main(env, { stdout, get }) {
+async function main(env, { stdout, get, setTimeout }) {
   const config = makeConfig(env);
-  const discordAPI = DiscordAPI(config`DISCORD_API_TOKEN`, { get });
+  const discordAPI = DiscordAPI(config`DISCORD_API_TOKEN`, { get, setTimeout });
   const guild = discordAPI.guilds(config`DISCORD_GUILD_ID`);
 
   const roles = await guild.roles();
@@ -199,6 +207,9 @@ if (require.main === module) {
     stdout: process.stdout,
     // eslint-disable-next-line global-require
     get: require('https').get,
+    // @ts-ignore
+    // eslint-disable-next-line no-undef
+    setTimeout,
   }).catch(err => console.error(err));
 }
 

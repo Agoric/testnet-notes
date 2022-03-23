@@ -58,10 +58,11 @@ async function* authorizedRequests(channel, guild, role, quorum) {
  * @param {{
  *   get: typeof import('https').get,
  *   stdout: typeof import('process').stdout
+ *   setTimeout: typeof setTimeout,
  * }} io
  */
-async function main(env, { stdout, get }) {
-  const discordAPI = DiscordAPI(env.DISCORD_API_TOKEN, { get });
+async function main(env, { stdout, get, setTimeout }) {
+  const discordAPI = DiscordAPI(env.DISCORD_API_TOKEN, { get, setTimeout });
   const guild = discordAPI.guilds(env.DISCORD_GUILD_ID);
 
   // to get mod-1-bld role id:
@@ -92,5 +93,6 @@ if (require.main === module) {
     stdout: process.stdout,
     // eslint-disable-next-line global-require
     get: require('https').get,
+    setTimeout,
   }).catch(err => console.error(err));
 }
