@@ -214,4 +214,4 @@ if (require.main === module) {
 }
 
 /* global module */
-module.exports = { DiscordAPI, avatar };
+module.exports = { DiscordAPI, avatar, getContent };
