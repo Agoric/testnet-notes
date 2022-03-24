@@ -10,6 +10,10 @@ const config = {
 const searchBySender = address =>
   `/tx_search?query="transfer.sender='${address}'"&per_page=100`;
 
+/**
+ * @param {{ hash: string, tx_result: { log: string }}[]} txs
+ * @returns {{ hash: string, recipient: string, sender: string, amount: string}[]}
+ */
 const transfers = txs =>
   txs
     .map(({ hash, tx_result: { log: logText } }) => {

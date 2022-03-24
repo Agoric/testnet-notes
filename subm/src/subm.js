@@ -19,6 +19,7 @@ const { makeFirebaseAdmin, getFirebaseConfig } = require('./firebaseTool.js');
 const { generateV4SignedPolicy } = require('./objStore.js');
 const { lookup, upsert } = require('./sheetAccess.js');
 const { makeConfig } = require('./config.js');
+const { requestStatus } = require('./request1bld.js');
 
 const { freeze, keys, values, entries } = Object; // please excuse freeze vs. harden
 
@@ -72,6 +73,7 @@ const Site = freeze({
     callback: '/auth/discord/callback',
     badLogin: '/loginRefused',
     contactForm: '/community/contact',
+    request1bld: '/community/request1bld',
     uploadSlog: '/participant/slogForm',
     uploadSuccess: '/participant/slogOK',
     loadGenKey: '/participant/loadGenKey',
@@ -217,6 +219,40 @@ ${Site.welcome(member)}
     <input type="submit" value="Submit">
   </fieldset>
 </form>
+  `,
+
+  exploreAddr: addr =>
+    `<small><code><a href="https://agoric.bigdipper.live/accounts/${addr}">${addr}</a></code></small>`,
+  exploreTx: hash =>
+    hash
+      ? `<small><code><a href="https://agoric.bigdipper.live/transactions/${hash}"
+      >${hash.slice(0, 16)}...</a></code></small>`
+      : '',
+
+  /** @param {Awaited<ReturnType<typeof requestStatus>>} requests */
+  requestStatus: requests => `${AgoricStyle.top}
+  <h1>1 BLD Request Status</h1>
+  <div>background: <a href="https://github.com/Agoric/validator-profiles/wiki/Request-1-BLD">Request 1 BLD</a></div>
+  <table border=1>
+  <thead><th>Request</th><th>To</th><th>Tx?</th></thead>
+  <tbody>
+    ${requests
+      .map(
+        ({ message: { id, author, timestamp }, address, hash }) => `
+      <tr>
+        <td>
+          <a href="https://discord.com/channels/585576150827532298/946137891023777802/${id}">
+          ${timestamp.slice(0, '1999-01-01T12:59'.length).replace('T', ' ')}
+            <b title='${author.id}'>${(author || {}).username || 'author'}</b>
+        </td>
+        <td>${Site.exploreAddr(address)}</td>
+        <td>${Site.exploreTx(hash)}</td>
+      </tr>
+    `,
+      )
+      .join('\n')}
+  </tbody>
+  </table>
   `,
   /**
    * @param { GuildMember } member
@@ -517,6 +553,7 @@ function makeDiscordBot(guild, authorizedRoles, opts, powers) {
  * @param {{
  *   clock: () => number,
  *   get: typeof import('https').get,
+ *   setTimeout: typeof setTimeout,
  *   express: typeof import('express'),
  *   GoogleSpreadsheet: typeof import('google-spreadsheet').GoogleSpreadsheet,
  *   makeStorage: (...args: unknown[]) => StorageT,
@@ -526,7 +563,7 @@ function makeDiscordBot(guild, authorizedRoles, opts, powers) {
  */
 async function main(
   env,
-  { clock, get, express, makeStorage, admin, GoogleSpreadsheet },
+  { clock, get, setTimeout, express, makeStorage, admin, GoogleSpreadsheet },
 ) {
   const app = express();
   app.enable('trust proxy'); // trust X-Forwarded-* headers
@@ -555,7 +592,7 @@ async function main(
   });
   await doc.loadInfo();
 
-  const discordAPI = DiscordAPI(config`DISCORD_API_TOKEN`, { get });
+  const discordAPI = DiscordAPI(config`DISCORD_API_TOKEN`, { get, setTimeout });
   const guild = discordAPI.guilds(config`DISCORD_GUILD_ID`);
   const loadGenAdmin = makeFirebaseAdmin(admin, getFirebaseConfig(config));
   loadGenAdmin.init();
@@ -643,6 +680,17 @@ async function main(
     );
   });
 
+  const channel = discordAPI.channels(config`CHANNEL_ID`);
+  const roleID = config`REVIEWER_ROLE_ID`;
+  app.get(Site.path.request1bld, async (req, res) => {
+    try {
+      const status = await requestStatus(channel, guild, roleID, { get });
+      res.send(Site.requestStatus(status));
+    } catch (err) {
+      handleError(res, req.baseUrl, err);
+    }
+  });
+
   // Upload form
   // Note the actual upload request goes directly to Google Cloud Storage.
   app.get(
@@ -703,6 +751,7 @@ if (require.main === module) {
       clock: () => Date.now(),
       express: require('express'),
       get: require('https').get,
+      setTimeout,
       makeStorage: (C => (...args) => new C(...args))(
         require('@google-cloud/storage').Storage,
       ),

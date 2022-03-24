@@ -81,6 +81,14 @@ const query = opts => (opts ? `?${new URLSearchParams(opts).toString()}` : '');
  * }} UserObject
  * @typedef { string } Snowflake 64 bit numeral
  * @typedef { string } TimeStamp ISO8601 format
+ *
+ * https://discord.com/developers/docs/resources/channel#message-object
+ * @typedef {{
+ *   id: Snowflake,
+ *   author: UserObject,
+ *   content: string,
+ *   timestamp: TimeStamp
+ * }} MessageObject
  */
 function DiscordAPI(token, { get, setTimeout }) {
   // cribbed from rchain-dbr/o2r/gateway/server/main.js
@@ -88,6 +96,10 @@ function DiscordAPI(token, { get, setTimeout }) {
   const api = '/api/v6';
   const headers = { Authorization: `Bot ${token}` };
 
+  /**
+   * @param {string} path
+   * @returns {Promise<any>}
+   */
   const getJSON = async path => {
     const body = await getContent(host, path, headers, { get });
     const data = JSON.parse(body);
@@ -102,10 +114,18 @@ function DiscordAPI(token, { get, setTimeout }) {
   return freeze({
     channels: channelID => {
       return freeze({
+        /**
+         * @param {Record<string,unknown>} opts
+         * @returns {Promise<MessageObject[]>}
+         */
         getMessages: opts =>
           getJSON(`${api}/channels/${channelID}/messages${query(opts)}`),
         messages: messageID =>
           freeze({
+            /**
+             * @param {string} emoji
+             * @returns {Promise<UserObject[]>}
+             */
             reactions: emoji =>
               getJSON(
                 `${api}/channels/${channelID}/messages/${messageID}/reactions/${encodeURIComponent(

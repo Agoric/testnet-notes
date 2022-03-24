@@ -7,6 +7,7 @@ const { searchBySender, transfers } = require('./tendermintRPC');
 const config = {
   host: 'rpc-agoric.nodes.guru',
   address: 'agoric15qxmfufeyj4zm9zwnsczp72elxsjsvd0vm4q8h',
+  quorum: 2,
 };
 
 const fail = () => {
@@ -55,9 +56,50 @@ async function* authorizedRequests(channel, guild, role, quorum) {
     }
     if (endorsers.length >= quorum) {
       const [_, address] = msg.content.match(/(agoric1\S+)/);
+      if (typeof address !== 'string') throw TypeError(address);
       yield { message: msg, address, endorsers };
     }
   }
+}
+
+/**
+ * @param {ReturnType<ReturnType<typeof DiscordAPI>['channels']>} channel
+ * @param {ReturnType<ReturnType<typeof DiscordAPI>['guilds']>} guild
+ * @param {string} roleID
+ * @param {{
+ *   get: typeof import('https').get,
+ * }} io
+ */
+async function requestStatus(channel, guild, roleID, { get }) {
+  const txs = await getContent(
+    config.host,
+    searchBySender(config.address),
+    {},
+    { get },
+  ).then(txt => JSON.parse(txt).result.txs);
+
+  const txfrs = transfers(txs);
+  // console.log(txfrs);
+  const byRecipient = new Map(txfrs.map(txfr => [txfr.recipient, txfr]));
+  // console.log(byRecipient.keys());
+
+  const result = [];
+  for await (const {
+    message: { id, timestamp, author },
+    address,
+    endorsers,
+  } of authorizedRequests(channel, guild, roleID, config.quorum)) {
+    const hash = byRecipient.has(address)
+      ? byRecipient.get(address).hash
+      : undefined;
+    result.push({
+      message: { id, timestamp, author },
+      address,
+      endorsers,
+      hash,
+    });
+  }
+  return result;
 }
 
 /**
@@ -122,3 +164,5 @@ if (require.main === module) {
     setTimeout,
   }).catch(err => console.error(err));
 }
+
+module.exports = { requestStatus };
