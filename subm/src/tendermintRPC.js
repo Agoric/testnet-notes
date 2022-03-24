@@ -1,12 +1,28 @@
 const { getContent } = require('./discordGuild.js');
 
-const searchBySender = address =>
-  `/tx_search?query="transfer.sender='${address}'"`;
+const { fromEntries } = Object;
 
 const config = {
   host: 'rpc-agoric.nodes.guru',
   address: 'agoric15qxmfufeyj4zm9zwnsczp72elxsjsvd0vm4q8h',
 };
+
+const searchBySender = address =>
+  `/tx_search?query="transfer.sender='${address}'"`;
+
+const transfers = txs =>
+  txs
+    .map(({ hash, tx_result: { log: logText } }) => {
+      const [{ events }] = JSON.parse(logText);
+      if (!events) return [];
+      return events
+        .filter(({ type }) => type === 'transfer')
+        .map(({ attributes }) => ({
+          hash,
+          ...fromEntries(attributes.map(({ key, value }) => [key, value])),
+        }));
+    })
+    .flat();
 
 /**
  * @param {{
@@ -14,14 +30,14 @@ const config = {
  * }} io
  */
 const main = async ({ get }) => {
-  const txt = await getContent(
+  const txs = await getContent(
     config.host,
     searchBySender(config.address),
     {},
     { get },
-  );
-  const data = JSON.parse(txt);
-  console.log(data);
+  ).then(txt => JSON.parse(txt).result.txs);
+
+  console.log(transfers(txs.slice(0, 3)));
 };
 
 /* global require, module */
