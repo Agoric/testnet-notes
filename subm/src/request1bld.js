@@ -57,11 +57,10 @@ async function* authorizedRequests(channel, guild, role, quorum) {
  * @param {Record<string, string | undefined>} env
  * @param {{
  *   get: typeof import('https').get,
- *   stdout: typeof import('process').stdout
  *   setTimeout: typeof setTimeout,
  * }} io
  */
-async function main(env, { stdout, get, setTimeout }) {
+async function main(env, { get, setTimeout }) {
   const discordAPI = DiscordAPI(env.DISCORD_API_TOKEN, { get, setTimeout });
   const guild = discordAPI.guilds(env.DISCORD_GUILD_ID);
 
@@ -90,7 +89,6 @@ async function main(env, { stdout, get, setTimeout }) {
 /* global require, process, module */
 if (require.main === module) {
   main(process.env, {
-    stdout: process.stdout,
     // eslint-disable-next-line global-require
     get: require('https').get,
     setTimeout,
