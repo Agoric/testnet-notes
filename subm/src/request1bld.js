@@ -1,7 +1,13 @@
 /* eslint-disable no-await-in-loop */
 // See https://github.com/Agoric/validator-profiles/wiki/Request-1-BLD
 
-const { DiscordAPI } = require('./discordGuild');
+const { DiscordAPI, getContent } = require('./discordGuild');
+const { searchBySender, transfers } = require('./tendermintRPC');
+
+const config = {
+  host: 'rpc-agoric.nodes.guru',
+  address: 'agoric15qxmfufeyj4zm9zwnsczp72elxsjsvd0vm4q8h',
+};
 
 const fail = () => {
   throw Error();
@@ -48,7 +54,8 @@ async function* authorizedRequests(channel, guild, role, quorum) {
       }
     }
     if (endorsers.length >= quorum) {
-      yield { message: msg, endorsers };
+      const [_, address] = msg.content.match(/(agoric1\S+)/);
+      yield { message: msg, address, endorsers };
     }
   }
 }
@@ -69,19 +76,40 @@ async function main(env, { get, setTimeout }) {
 
   const channel = discordAPI.channels(env.CHANNEL_ID);
 
-  const header = ['timestamp', 'msgID', 'requestor', 'address', 'endorsers'];
+  const txs = await getContent(
+    config.host,
+    searchBySender(config.address),
+    {},
+    { get },
+  ).then(txt => JSON.parse(txt).result.txs);
+
+  const txfrs = transfers(txs);
+  // console.log(txfrs);
+  const byRecipient = new Map(txfrs.map(txfr => [txfr.recipient, txfr]));
+  // console.log(byRecipient.keys());
+
+  const header = [
+    'timestamp',
+    'msgID',
+    'requestor',
+    'address',
+    'endorsers',
+    'hash',
+  ];
   console.log(header.join(','));
-  for await (const { message: msg, endorsers } of authorizedRequests(
+  for await (const { message: msg, address, endorsers } of authorizedRequests(
     channel,
     guild,
     env.REVIEWER_ROLE_ID,
     2,
   )) {
-    const [_, address] = msg.content.match(/(agoric1\S+)/);
     const label = user => `${user.username}#${user.discriminator}`;
     const ok = endorsers.map(u => label(u.user)).join(' ');
+    const hash = byRecipient.has(address) ? byRecipient.get(address).hash : '';
     console.log(
-      `${msg.timestamp},${msg.id},${label(msg.author)},${address},${ok}`,
+      `${msg.timestamp},${msg.id},${label(
+        msg.author,
+      )},${address},${ok},${hash}`,
     );
   }
 }

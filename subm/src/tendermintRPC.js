@@ -8,7 +8,7 @@ const config = {
 };
 
 const searchBySender = address =>
-  `/tx_search?query="transfer.sender='${address}'"`;
+  `/tx_search?query="transfer.sender='${address}'"&per_page=100`;
 
 const transfers = txs =>
   txs
@@ -47,3 +47,5 @@ if (require.main === module) {
     get: require('https').get,
   }).catch(err => console.error(err));
 }
+
+module.exports = { searchBySender, transfers };
