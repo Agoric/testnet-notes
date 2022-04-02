@@ -35,7 +35,9 @@ function getContent(host, path, headers, { get }) {
   });
 }
 
-const query = opts => (opts ? `?${new URLSearchParams(opts).toString()}` : '');
+const { keys } = Object;
+const query = opts =>
+  keys(opts).length > 0 ? `?${new URLSearchParams(opts).toString()}` : '';
 
 /**
  * Discord API (a small slice of it, anyway)
@@ -101,6 +103,7 @@ function DiscordAPI(token, { get, setTimeout }) {
    * @returns {Promise<any>}
    */
   const getJSON = async path => {
+    console.log('getJSON', { path });
     const body = await getContent(host, path, headers, { get });
     const data = JSON.parse(body);
     // console.log('Discord done:', Object.keys(data));
@@ -112,14 +115,16 @@ function DiscordAPI(token, { get, setTimeout }) {
   };
 
   return freeze({
+    /** @param { Snowflake } channelID */
     channels: channelID => {
       return freeze({
         /**
          * @param {Record<string,unknown>} opts
          * @returns {Promise<MessageObject[]>}
          */
-        getMessages: opts =>
+        getMessages: (opts = {}) =>
           getJSON(`${api}/channels/${channelID}/messages${query(opts)}`),
+        /** @param { Snowflake } messageID */
         messages: messageID =>
           freeze({
             /**
@@ -180,6 +185,27 @@ function avatar(user) {
 }
 
 /**
+ * @param {(opts: any) => Promise<T[]>} fn
+ * @param {number} [limit]
+ * @template {{ id: string }} T
+ */
+async function paged(fn, limit = 100) {
+  /** @type {T[][]} */
+  const pages = [];
+  /** @type { string | undefined } */
+  let before;
+  do {
+    console.error('getting page', pages.length, before);
+    // eslint-disable-next-line no-await-in-loop
+    const page = await fn(before ? { limit, before } : { limit });
+    if (!page.length) break;
+    before = page.slice(-1)[0].id;
+    pages.push(page);
+  } while (before);
+  return pages.flat();
+}
+
+/**
  * @param {ReturnType<ReturnType<DiscordAPI>['guilds']>} guild
  */
 async function pagedMembers(guild) {
@@ -209,7 +235,7 @@ async function pagedMembers(guild) {
  *   setTimeout: typeof setTimeout,
  * }} io
  */
-async function main(env, { stdout, get, setTimeout }) {
+async function integrationTest(env, { stdout, get, setTimeout }) {
   const config = makeConfig(env);
   const discordAPI = DiscordAPI(config`DISCORD_API_TOKEN`, { get, setTimeout });
   const guild = discordAPI.guilds(config`DISCORD_GUILD_ID`);
@@ -223,7 +249,7 @@ async function main(env, { stdout, get, setTimeout }) {
 
 /* global require, process */
 if (require.main === module) {
-  main(process.env, {
+  integrationTest(process.env, {
     stdout: process.stdout,
     // eslint-disable-next-line global-require
     get: require('https').get,
@@ -234,4 +260,4 @@ if (require.main === module) {
 }
 
 /* global module */
-module.exports = { DiscordAPI, avatar, getContent };
+module.exports = { DiscordAPI, avatar, getContent, paged };

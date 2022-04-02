@@ -1,7 +1,8 @@
 /* eslint-disable no-await-in-loop */
 // See https://github.com/Agoric/validator-profiles/wiki/Request-1-BLD
 
-const { DiscordAPI, getContent } = require('./discordGuild');
+const { DiscordAPI, getContent, paged } = require('./discordGuild.js');
+const { upsert } = require('./sheetAccess');
 const { searchBySender, transfers } = require('./tendermintRPC');
 
 const config = {
@@ -36,7 +37,7 @@ async function* authorizedRequests(channel, guild, role, quorum) {
     return detail;
   };
 
-  const messages = await channel.getMessages({ limit: 100 });
+  const messages = await paged(channel.getMessages);
   const hasAddr = messages.filter(msg => msg.content.match(/agoric1/));
   if (!hasAddr) return;
   const hasChecks = hasAddr.filter(msg => {
@@ -50,7 +51,7 @@ async function* authorizedRequests(channel, guild, role, quorum) {
     const endorsers = [];
     for (const endorsement of endorsements) {
       const detail = await getMemberDetail(endorsement.id);
-      if (detail.roles.includes(role)) {
+      if (detail && detail.roles && detail.roles.includes(role)) {
         endorsers.push(detail);
       }
     }
@@ -102,6 +103,8 @@ async function requestStatus(channel, guild, roleID, { get }) {
   return result;
 }
 
+const label = user => `${user.username}#${user.discriminator}`;
+
 /**
  * @param {Record<string, string | undefined>} env
  * @param {{
@@ -145,7 +148,6 @@ async function main(env, { get, setTimeout }) {
     env.REVIEWER_ROLE_ID,
     2,
   )) {
-    const label = user => `${user.username}#${user.discriminator}`;
     const ok = endorsers.map(u => label(u.user)).join(' ');
     const hash = byRecipient.has(address) ? byRecipient.get(address).hash : '';
     console.log(
@@ -156,13 +158,65 @@ async function main(env, { get, setTimeout }) {
   }
 }
 
+/**
+ * @param {string[]} args
+ * @param {Record<string, string | undefined>} env
+ * @param {Object} io
+ * @param {typeof import('google-spreadsheet').GoogleSpreadsheet} io.GoogleSpreadsheet
+ * @param {typeof import('https').get} io.get
+ * @param {typeof setTimeout} io.setTimeout
+ */
+const main2 = async (args, env, { get, setTimeout, GoogleSpreadsheet }) => {
+  const discordAPI = DiscordAPI(env.DISCORD_API_TOKEN, { get, setTimeout });
+  const guild = discordAPI.guilds(env.DISCORD_GUILD_ID);
+
+  // to get mod-1-bld role id:
+  // console.log(await guild.roles());
+
+  const channel = discordAPI.channels(env.CHANNEL_ID);
+
+  const creds = {
+    client_email: env.GOOGLE_SERVICES_EMAIL,
+    private_key: env.GCS_PRIVATE_KEY,
+  };
+  // Initialize the sheet - doc ID is the long id in the sheets URL
+  const doc = new GoogleSpreadsheet(env.SHEET_1BLD_ID);
+  // Initialize Auth - see https://theoephraim.github.io/node-google-spreadsheet/#/getting-started/authentication
+  await doc.useServiceAccountAuth(creds);
+  await doc.loadInfo(); // loads document properties and worksheets
+  console.log(doc.title);
+  const sheet = doc.sheetsByIndex[0];
+
+  const memberLabel = mem => mem.nick || label(mem.user);
+  for await (const { message: msg, address, endorsers } of authorizedRequests(
+    channel,
+    guild,
+    env.REVIEWER_ROLE_ID,
+    2,
+  )) {
+    upsert(sheet, address, {
+      Request: `https://discord.com/channels/585576150827532298/946137891023777802/${msg.id}`,
+      At: msg.timestamp.slice(0, '1999-01-01T12:59'.length).replace('T', ' '),
+      By: label(msg.author),
+      To: address,
+      Reviewers: endorsers.map(memberLabel).join(','),
+    });
+  }
+};
+
 /* global require, process, module */
 if (require.main === module) {
-  main(process.env, {
-    // eslint-disable-next-line global-require
-    get: require('https').get,
-    setTimeout,
-  }).catch(err => console.error(err));
+  main2(
+    process.argv.slice(2),
+    { ...process.env },
+    {
+      // eslint-disable-next-line global-require
+      get: require('https').get,
+      setTimeout,
+      // eslint-disable-next-line global-require
+      GoogleSpreadsheet: require('google-spreadsheet').GoogleSpreadsheet, // please excuse CJS
+    },
+  ).catch(err => console.error(err));
 }
 
 module.exports = { requestStatus };
