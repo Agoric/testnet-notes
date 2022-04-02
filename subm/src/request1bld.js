@@ -85,16 +85,13 @@ async function requestStatus(channel, guild, roleID, { get }) {
   // console.log(byRecipient.keys());
 
   const result = [];
-  for await (const {
-    message: { id, timestamp, author },
-    address,
-    endorsers,
-  } of authorizedRequests(channel, guild, roleID, config.quorum)) {
+  const eachRequest = authorizedRequests(channel, guild, roleID, config.quorum);
+  for await (const { message, address, endorsers } of eachRequest) {
     const hash = byRecipient.has(address)
       ? byRecipient.get(address).hash
       : undefined;
     result.push({
-      message: { id, timestamp, author },
+      message,
       address,
       endorsers,
       hash,
@@ -188,19 +185,20 @@ const main2 = async (args, env, { get, setTimeout, GoogleSpreadsheet }) => {
   const sheet = doc.sheetsByIndex[0];
 
   const memberLabel = mem => mem.nick || label(mem.user);
-  for await (const { message: msg, address, endorsers } of authorizedRequests(
-    channel,
-    guild,
-    env.REVIEWER_ROLE_ID,
-    2,
-  )) {
-    upsert(sheet, address, {
-      Request: `https://discord.com/channels/585576150827532298/946137891023777802/${msg.id}`,
+  const eachStatus = await requestStatus(channel, guild, env.REVIEWER_ROLE_ID, {
+    get,
+  });
+  for (const { message: msg, address, endorsers, hash } of eachStatus) {
+    const record = {
+      To: address,
+      Link: `https://discord.com/channels/${env.DISCORD_GUILD_ID}/${env.CHANNEL_ID}/${msg.id}`,
       At: msg.timestamp.slice(0, '1999-01-01T12:59'.length).replace('T', ' '),
       By: label(msg.author),
-      To: address,
       Reviewers: endorsers.map(memberLabel).join(','),
-    });
+      Tx: hash && `https://agoric.bigdipper.live/transactions/${hash}`,
+      Request: msg.content,
+    };
+    await upsert(sheet, address, record); // do not interleave upserts!
   }
 };
 
