@@ -35,11 +35,18 @@ function getContent(host, path, headers, { get }) {
   });
 }
 
+const { keys } = Object;
+const query = opts =>
+  keys(opts).length > 0 ? `?${new URLSearchParams(opts).toString()}` : '';
+
 /**
  * Discord API (a small slice of it, anyway)
  *
  * @param {string} token
- * @param {{ get: typeof import('https').get }} io
+ * @param {{
+ *   get: typeof import('https').get,
+ *   setTimeout: typeof setTimeout,
+ * }} io
  *
  * // https://discordapp.com/developers/docs/resources/user
  * @typedef {{
@@ -76,21 +83,63 @@ function getContent(host, path, headers, { get }) {
  * }} UserObject
  * @typedef { string } Snowflake 64 bit numeral
  * @typedef { string } TimeStamp ISO8601 format
+ *
+ * https://discord.com/developers/docs/resources/channel#message-object
+ * @typedef {{
+ *   id: Snowflake,
+ *   author: UserObject,
+ *   content: string,
+ *   timestamp: TimeStamp
+ * }} MessageObject
  */
-function DiscordAPI(token, { get }) {
+function DiscordAPI(token, { get, setTimeout }) {
   // cribbed from rchain-dbr/o2r/gateway/server/main.js
   const host = 'discordapp.com';
   const api = '/api/v6';
   const headers = { Authorization: `Bot ${token}` };
 
+  /**
+   * @param {string} path
+   * @returns {Promise<any>}
+   */
   const getJSON = async path => {
+    console.log('getJSON', { path });
     const body = await getContent(host, path, headers, { get });
     const data = JSON.parse(body);
     // console.log('Discord done:', Object.keys(data));
+    if ('retry_after' in data) {
+      await new Promise(r => setTimeout(r, data.retry_after));
+      return getJSON(path);
+    }
     return data;
   };
 
   return freeze({
+    /** @param { Snowflake } channelID */
+    channels: channelID => {
+      return freeze({
+        /**
+         * @param {Record<string,unknown>} opts
+         * @returns {Promise<MessageObject[]>}
+         */
+        getMessages: (opts = {}) =>
+          getJSON(`${api}/channels/${channelID}/messages${query(opts)}`),
+        /** @param { Snowflake } messageID */
+        messages: messageID =>
+          freeze({
+            /**
+             * @param {string} emoji
+             * @returns {Promise<UserObject[]>}
+             */
+            reactions: emoji =>
+              getJSON(
+                `${api}/channels/${channelID}/messages/${messageID}/reactions/${encodeURIComponent(
+                  emoji,
+                )}`,
+              ),
+          }),
+      });
+    },
     /**
      * @param { string } userID
      * @returns { Promise<UserObject> }
@@ -120,8 +169,7 @@ function DiscordAPI(token, { get }) {
           const opts = after
             ? { limit: `${limit}`, after }
             : { limit: `${limit}` };
-          const query = new URLSearchParams(opts).toString();
-          return getJSON(`${api}/guilds/${guildID}/members?${query}`);
+          return getJSON(`${api}/guilds/${guildID}/members${query(opts)}`);
         },
       });
     },
@@ -134,6 +182,27 @@ const avatarBase = 'https://cdn.discordapp.com/avatars';
 function avatar(user) {
   if (!user) return '/no-avatar???';
   return `${avatarBase}/${user.id}/${user.avatar}.png`;
+}
+
+/**
+ * @param {(opts: any) => Promise<T[]>} fn
+ * @param {number} [limit]
+ * @template {{ id: string }} T
+ */
+async function paged(fn, limit = 100) {
+  /** @type {T[][]} */
+  const pages = [];
+  /** @type { string | undefined } */
+  let before;
+  do {
+    console.error('getting page', pages.length, before);
+    // eslint-disable-next-line no-await-in-loop
+    const page = await fn(before ? { limit, before } : { limit });
+    if (!page.length) break;
+    before = page.slice(-1)[0].id;
+    pages.push(page);
+  } while (before);
+  return pages.flat();
 }
 
 /**
@@ -163,11 +232,12 @@ async function pagedMembers(guild) {
  * @param {{
  *   get: typeof import('https').get,
  *   stdout: typeof import('process').stdout
+ *   setTimeout: typeof setTimeout,
  * }} io
  */
-async function main(env, { stdout, get }) {
+async function integrationTest(env, { stdout, get, setTimeout }) {
   const config = makeConfig(env);
-  const discordAPI = DiscordAPI(config`DISCORD_API_TOKEN`, { get });
+  const discordAPI = DiscordAPI(config`DISCORD_API_TOKEN`, { get, setTimeout });
   const guild = discordAPI.guilds(config`DISCORD_GUILD_ID`);
 
   const roles = await guild.roles();
@@ -179,12 +249,15 @@ async function main(env, { stdout, get }) {
 
 /* global require, process */
 if (require.main === module) {
-  main(process.env, {
+  integrationTest(process.env, {
     stdout: process.stdout,
     // eslint-disable-next-line global-require
     get: require('https').get,
+    // @ts-ignore
+    // eslint-disable-next-line no-undef
+    setTimeout,
   }).catch(err => console.error(err));
 }
 
 /* global module */
-module.exports = { DiscordAPI, avatar };
+module.exports = { DiscordAPI, avatar, getContent, paged };

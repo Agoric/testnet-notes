@@ -9,6 +9,7 @@
     "lint:eslint": "eslint '**/*.js'",
     "lint:types": "tsc -p jsconfig.json",
     "start": "node src/subm.js",
+    "upsert": "node src/request1bld.js",
     "deploy": "gcloud app deploy",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
