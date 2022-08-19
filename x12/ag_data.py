@@ -48,7 +48,6 @@ if __name__ == '__main__':
 
 # %%
 from urllib.request import Request, HTTPError, BaseHandler
-from io import StringIO
 
 if IO_TESTING:
     # Use leading _ to remind ourselves of ambient authorities
@@ -125,6 +124,7 @@ def json_parse(s):
     return json.loads(s, object_hook=AttrDict)
 
 def get_json(url, ua):
+    # ISSUE: cache may get in the way of observing changing data
     cache = hasattr(ua, 'cache') and ua.cache
     if cache is not None and url in ua.cache:
         return ua.cache[url]
@@ -296,6 +296,9 @@ if IO_TESTING:
 
 IO_TESTING and _agoricNames.brand
 
+# %% [markdown]
+# Now we can test brands for identity:
+
 # %%
 IO_TESTING and _amm.metrics(_fromBoard).XYK[0] is _agoricNames.brand.IbcATOM
 
@@ -339,3 +342,39 @@ IO_TESTING and _amt(_amm.pool0.metrics(_fromBoard).centralAmount)
 # %%
 IO_TESTING and pd.DataFrame([pd.Series(_amt(a), name=col)
                              for col, a in _amm.pool0.metrics(_fromBoard).items()])
+
+# %% [markdown]
+# ## Price Feed: ATOM in USD
+
+# %%
+if IO_TESTING:
+    _priceFeed = ObjectNode.root(_theWeb).priceFeed
+
+IO_TESTING and _priceFeed.keys()
+
+# %%
+IO_TESTING and _priceFeed.ATOM_USD_price_feed(_fromBoard)
+
+# %% [markdown]
+# ## Vaults (0 vaults so far)
+
+# %%
+if IO_TESTING:
+    _vaultFactory = ObjectNode.root(_theWeb).vaultFactory
+
+IO_TESTING and _vaultFactory.keys()
+
+# %%
+IO_TESTING and _vaultFactory.manager0.keys()
+
+# %%
+IO_TESTING and _vaultFactory.manager0.metrics(_fromBoard)
+
+# %%
+IO_TESTING and _vaultFactory.governance(_fromBoard).current
+
+# %% [markdown]
+# ## Exploring `agoricNames`
+
+# %%
+IO_TESTING and _agoricNames.instance.keys()
